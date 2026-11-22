@@ -161,6 +161,13 @@ impl StreamingSession {
         }
 
         if let Some((frame_id, frame)) = self.backend.take_latest_frame() {
+            if self.latest_video_frame.is_none() {
+                crate::diagnostics::step("webrtc_video", if self.is_console_attempt {
+                    "CONSOLE_FIRST_DECODED_FRAME"
+                } else {
+                    "WEB_FIRST_DECODED_FRAME"
+                });
+            }
             self.latest_video_frame = Some(frame_id);
             self.current_video_frame = Some(frame);
         }
@@ -171,6 +178,7 @@ impl StreamingSession {
             match event {
                 PlaybackBackendEvent::Status(status) => self.status = status,
                 PlaybackBackendEvent::VideoResolution(width, height) => {
+                    crate::diagnostics::video_resolution(width, height);
                     self.stream_video_size = Some((width, height));
                 }
                 PlaybackBackendEvent::Closed => closed = true,
