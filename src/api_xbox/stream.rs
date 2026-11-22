@@ -43,6 +43,8 @@ pub struct Stream {
     pub session_id: String,
     session_path: String,
     pub state: StreamState,
+    /// True only for the experimental xgpuconsole play attempt.
+    pub(crate) is_console: bool,
 }
 
 #[derive(Deserialize)]
@@ -55,6 +57,7 @@ impl Stream {
         api_client: ApiClient,
         credentials: EndpointCredentials,
         response: StartStreamResponse,
+        is_console: bool,
     ) -> Self {
         let session_id = response
             .session_path
@@ -69,6 +72,7 @@ impl Stream {
             session_id,
             session_path: response.session_path,
             state: StreamState::New,
+            is_console,
         }
     }
 
