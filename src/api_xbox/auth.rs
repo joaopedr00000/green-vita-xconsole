@@ -515,14 +515,18 @@ impl MsalAuth {
 
         let home = self.streaming_token(&gssv_token, "xhome").await?;
 
+        crate::diagnostics::step("authentication", "XSTS_OK");
+        crate::diagnostics::step("xgpuconsole_token", "ATTEMPTING");
         // Silently probe the console offering. A refusal must never prevent the
         // unmodified xgpuweb / xgpuwebf2p flow from authenticating.
         let console_cloud = match self.streaming_token(&gssv_token, "xgpuconsole").await {
             Ok(credentials) => {
+                crate::diagnostics::step("xgpuconsole_token", "ACCEPTED_NOT_HARDWARE_PROOF");
                 eprintln!("xgpuconsole token accepted; console session is not yet validated");
                 Some(credentials)
             }
             Err(error) => {
+                crate::diagnostics::failure("xgpuconsole_token", &format!("{error:#}"));
                 eprintln!("xgpuconsole token unavailable; falling back to xgpuweb: {error:#}");
                 None
             }
@@ -537,6 +541,7 @@ impl MsalAuth {
             (Err(error), Err(_)) => return Err(error),
         };
 
+        crate::diagnostics::step("xgpuweb_token", "AVAILABLE");
         Ok(StreamingCredentials {
             home,
             cloud,
