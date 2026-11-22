@@ -1,0 +1,31 @@
+name: GreenVita original UI + automatic xgpuconsole
+on:
+  push:
+    branches: [original-auto-xgpuconsole]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: original-auto-xgpuconsole
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/vita-rust/vitasdk-rs:latest
+    steps:
+      - name: Checkout original source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build original UI with silent Xbox One fallback
+        env:
+          RUSTFLAGS: "-C target-feature=-neon"
+        run: cargo vita build vpk --release
+      - name: Publish test VPK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GreenVita-Original-UI-Auto-XGPUConsole
+          path: target/armv7-sony-vita-newlibeabihf/release/green-vita.vpk
+          retention-days: 14
+          if-no-files-found: error
