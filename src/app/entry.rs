@@ -195,10 +195,12 @@ impl App {
         match poll_job(job).await {
             PollJob::Pending(job) => self.state = AppState::LoadingTitles(job),
             PollJob::Done(Ok(games)) => {
+                crate::diagnostics::step("catalog", "WEB_CATALOG_AVAILABLE");
                 self.service.titles = games;
                 self.set_state(AppState::TitleList { selected: 0 });
             }
             PollJob::Done(Err(error)) => {
+                crate::diagnostics::failure("catalog", &format!("{error:#}"));
                 self.set_localized_error_screen("error-title-request", format!("{error:#}"));
             }
         }
