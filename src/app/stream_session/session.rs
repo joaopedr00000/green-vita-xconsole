@@ -1,4 +1,5 @@
 use crate::api::streaming::{PlaybackBackend, PlaybackBackendEvent};
+use super::StreamStartTarget;
 use crate::settings::Settings;
 use crate::streaming::input::{GamepadFrame, PointerEvent};
 use crate::streaming::video::{DecodedFrame, DirectVideoOutput};
@@ -21,6 +22,10 @@ pub(crate) struct StreamingSession {
     pub(in crate::app) pause_selected: usize,
     pub(in crate::app) title_id: Option<String>,
     pub(super) return_target: StreamReturnTarget,
+    /// Internal metadata for one automatic fallback; not exposed in menus.
+    is_console_attempt: bool,
+    launch_target_id: String,
+    launch_label: String,
     backend: PlaybackBackend,
     latest_video_frame: Option<u64>,
     current_video_frame: Option<DecodedFrame>,
@@ -35,7 +40,10 @@ impl StreamingSession {
         kind: StreamKind,
         title_id: Option<String>,
         return_selected: usize,
+        launch_target_id: String,
+        launch_label: String,
     ) -> Result<Self> {
+        let is_console_attempt = stream.is_console;
         let backend = PlaybackBackend::start_xbox(stream)?;
         let return_target = match kind {
             StreamKind::Cloud => StreamReturnTarget::Titles(return_selected),
@@ -48,12 +56,31 @@ impl StreamingSession {
             pause_selected: 0,
             title_id,
             return_target,
+            is_console_attempt,
+            launch_target_id,
+            launch_label,
             backend,
             latest_video_frame: None,
             current_video_frame: None,
             stream_video_size: None,
             pending_audio_packets: Vec::new(),
             ignore_confirm_until_release: false,
+        })
+    }
+
+    pub(super) fn web_fallback_target(&self) -> Option<StreamStartTarget> {
+        if !self.is_console_attempt {
+            return None;
+        }
+        let StreamReturnTarget::Titles(selected) = self.return_target else {
+            return None;
+        };
+        Some(StreamStartTarget {
+            kind: StreamKind::Cloud,
+            target_id: self.launch_target_id.clone(),
+            game_id: self.title_id.clone(),
+            label: self.launch_label.clone(),
+            return_selected: selected,
         })
     }
 
