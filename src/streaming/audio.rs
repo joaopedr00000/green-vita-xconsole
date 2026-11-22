@@ -8,8 +8,10 @@ pub const AUDIO_SAMPLE_RATE: i32 = 48_000;
 const AUDIO_CHANNELS: usize = 2;
 
 const AUDIO_BYTES_PER_SECOND: u32 = AUDIO_SAMPLE_RATE as u32 * AUDIO_CHANNELS as u32 * 2;
-const MAX_QUEUED_AUDIO_BYTES: u32 = AUDIO_BYTES_PER_SECOND * 240 / 1_000;
-const AUDIO_START_BUFFER_BYTES: u32 = AUDIO_BYTES_PER_SECOND * 80 / 1_000;
+// Keep audio close to live video; the previous 240ms cap made audible events
+// noticeably late after jitter. Retain conservative startup headroom for 2.4GHz.
+const MAX_QUEUED_AUDIO_BYTES: u32 = AUDIO_BYTES_PER_SECOND * 160 / 1_000;
+const AUDIO_START_BUFFER_BYTES: u32 = AUDIO_BYTES_PER_SECOND * 60 / 1_000;
 const MAX_OPUS_FRAME_SAMPLES_PER_CHANNEL: usize = 5_760;
 const MAX_PENDING_OPUS_PACKETS: usize = 32;
 const MAX_PENDING_PCM_BUFFERS: usize = 8;
