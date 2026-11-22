@@ -11,6 +11,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const STREAM_STATS_INTERVAL: Duration = Duration::from_secs(1);
+const NACK_MAX_GAP: u16 = 48;
+const NACK_MAX_PENDING: usize = 64;
+const NACK_REPORT_LIMIT: usize = 24;
+const NACK_GRACE: Duration = Duration::from_millis(12);
+const NACK_INTERVAL: Duration = Duration::from_millis(35);
+const NACK_EXPIRY: Duration = Duration::from_millis(180);
 
 #[derive(Default)]
 struct VideoStats {
@@ -34,6 +40,9 @@ pub(crate) struct VideoReceiver {
     bitrate: AdaptiveBitrate,
     last_decoder_error_logged: Option<Instant>,
     pending_recovery_log: bool,
+    expected_video_sequence: Option<u16>,
+    missing_video_packets: Vec<(u16, Instant)>,
+    last_nack_report: Option<Instant>,
 }
 
 impl VideoReceiver {
@@ -55,6 +64,9 @@ impl VideoReceiver {
             bitrate: AdaptiveBitrate::new(),
             last_decoder_error_logged: None,
             pending_recovery_log: false,
+            expected_video_sequence: None,
+            missing_video_packets: Vec::new(),
+            last_nack_report: None,
         })
     }
 
@@ -67,6 +79,9 @@ impl VideoReceiver {
         self.track_id = Some(track_id);
         self.receiver_id = Some(receiver_id);
         self.ssrc = Some(ssrc);
+        self.expected_video_sequence = None;
+        self.missing_video_packets.clear();
+        self.last_nack_report = None;
     }
 
     pub(crate) fn handles(&self, track_id: &MediaStreamTrackId) -> bool {
@@ -75,6 +90,7 @@ impl VideoReceiver {
 
     pub(crate) fn receive(&mut self, packet: Packet, keyframe_requested: &mut bool) {
         self.received_packet = true;
+        self.record_video_sequence(packet.header.sequence_number, Instant::now());
         self.bitrate.packet_received();
         let sample_stats = self.rtp.receive(&self.decoder, packet, keyframe_requested);
         self.stats.dropped = self
@@ -129,6 +145,72 @@ impl VideoReceiver {
             self.stats.decode_errors = self.stats.decode_errors.saturating_add(decode_errors);
             self.decoder.reset_decoder();
             self.rtp.wait_for_keyframe();
+        }
+    }
+
+    /// Observe sequence gaps without assuming late packets are irretrievably lost.
+    /// A missing packet is discarded from this list on arrival or after 180ms.
+    fn record_video_sequence(&mut self, sequence: u16, now: Instant) {
+        self.missing_video_packets.retain(|(seq, at)| {
+            *seq != sequence && now.duration_since(*at) <= NACK_EXPIRY
+        });
+        if let Some(expected) = self.expected_video_sequence {
+            let distance = sequence.wrapping_sub(expected);
+            if distance == 0 {
+                self.expected_video_sequence = Some(sequence.wrapping_add(1));
+            } else if distance < 32768 {
+                if distance <= NACK_MAX_GAP {
+                    for offset in 0..distance {
+                        if self.missing_video_packets.len() >= NACK_MAX_PENDING {
+                            break;
+                        }
+                        let lost = expected.wrapping_add(offset);
+                        if !self.missing_video_packets.iter().any(|(seq, _)| *seq == lost) {
+                            self.missing_video_packets.push((lost, now));
+                        }
+                    }
+                }
+                self.expected_video_sequence = Some(sequence.wrapping_add(1));
+            }
+            // Very old/out-of-order packet: do not advance the sequence cursor.
+        } else {
+            self.expected_video_sequence = Some(sequence.wrapping_add(1));
+        }
+    }
+
+    /// Real, bounded receiver-side RTCP NACK. The remote sender may ignore it,
+    /// but this at least asks for missing packets rather than merely advertising
+    /// NACK in the SDP. The peer type remains unchanged (Vita RTC compatibility).
+    pub(crate) fn request_nack(&mut self, peer: &mut RTCPeerConnection, now: Instant) {
+        self.missing_video_packets.retain(|(_, at)| {
+            now.duration_since(*at) <= NACK_EXPIRY
+        });
+        if self.last_nack_report.is_some_and(|last| {
+            now.duration_since(last) < NACK_INTERVAL
+        }) {
+            return;
+        }
+        let nacks: Vec<_> = self.missing_video_packets.iter()
+            .filter(|(_, at)| now.duration_since(*at) >= NACK_GRACE)
+            .take(NACK_REPORT_LIMIT)
+            .map(|(seq, _)| {
+                rtcp::transport_feedbacks::transport_layer_nack::NackPair::new(*seq)
+            })
+            .collect();
+        if nacks.is_empty() {
+            return;
+        }
+        if let (Some(receiver_id), Some(ssrc)) = (self.receiver_id, self.ssrc)
+            && let Some(mut receiver) = peer.rtp_receiver(receiver_id)
+        {
+            let nack = rtcp::transport_feedbacks::transport_layer_nack::TransportLayerNack {
+                sender_ssrc: 0,
+                media_ssrc: ssrc,
+                nacks,
+            };
+            if receiver.write_rtcp(vec![Box::new(nack)]).is_ok() {
+                self.last_nack_report = Some(now);
+            }
         }
     }
 
