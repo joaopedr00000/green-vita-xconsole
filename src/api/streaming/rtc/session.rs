@@ -133,6 +133,7 @@ impl<B: RtcSessionBackend> RtcSession<B> {
         }
         self.request_keyframe(keyframe_requested, now);
         if self.connection_state == RTCPeerConnectionState::Connected {
+            self.video.request_nack(&mut self.peer, now);
             self.video.adapt_bitrate(&mut self.peer, now);
         }
         if let Some(status) = self.video.status(now) {
