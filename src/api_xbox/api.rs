@@ -9,11 +9,13 @@ use serde_json::{Value, json};
 use std::time::Duration;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Cosmetic Xbox One Edge client fingerprint. Cannot substitute real Xbox authorization.
+const XBOX_ONE_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; Xbox; Xbox One) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edge/44.18363.8131";
 
 const DEVICE_INFO_JSON: &str = r#"{"appInfo":{"env":{"clientAppId":"www.xbox.com","clientAppType":"browser","clientAppVersion":"26.1.97","clientSdkVersion":"10.3.7","httpEnvironment":"prod","sdkInstallId":""}},"dev":{"hw":{"make":"Microsoft","model":"unknown","sdktype":"web"},"os":{"name":"android","ver":"22631.2715","platform":"desktop"},"displayInfo":{"dimensions":{"widthInPixels":1280,"heightInPixels":720},"pixelDensity":{"dpiX":1,"dpiY":1}},"browser":{"browserName":"chrome","browserVersion":"140.0.3485.54"}}}"#;
 
 /// Experimental console client metadata; server-side hardware checks may reject it.
-const XBOX_ONE_DEVICE_INFO_JSON: &str = r#"{"appInfo":{"env":{"clientAppId":"XboxOne","clientAppType":"console","clientAppVersion":"10.0.22621","clientSdkVersion":"10.3.7","httpEnvironment":"prod","sdkInstallId":""}},"dev":{"hw":{"make":"Microsoft","model":"Xbox One","sdktype":"console"},"os":{"name":"XboxOne","ver":"10.0.22621","platform":"console"},"displayInfo":{"dimensions":{"widthInPixels":1280,"heightInPixels":720},"pixelDensity":{"dpiX":1,"dpiY":1}}}}"#;
+const XBOX_ONE_DEVICE_INFO_JSON: &str = r#"{"appInfo":{"env":{"clientAppId":"XboxOne","clientAppType":"console","clientAppVersion":"10.0.22621","clientSdkVersion":"10.3.7","httpEnvironment":"prod","sdkInstallId":""}},"dev":{"hw":{"make":"Microsoft","model":"Xbox One","sdktype":"console"},"os":{"name":"XboxOne","ver":"10.0.22621","platform":"console"},"displayInfo":{"dimensions":{"widthInPixels":1280,"heightInPixels":720},"pixelDensity":{"dpiX":1,"dpiY":1}},"browser":{"browserName":"edge","browserVersion":"44.18363.8131"}}}"#;
 
 #[derive(Debug, Clone)]
 pub struct ApiClientConfig {
@@ -259,6 +261,9 @@ impl ApiClient {
             .header("Content-Type", "application/json")
             .header("X-Gssv-Client", if is_console { "XboxOne" } else { "XboxComBrowser" })
             .header("X-MS-Device-Info", if is_console { XBOX_ONE_DEVICE_INFO_JSON } else { DEVICE_INFO_JSON });
+        if is_console {
+            request = request.header("User-Agent", XBOX_ONE_USER_AGENT);
+        }
 
         if !credentials.token.is_empty() {
             request = request.bearer_auth(&credentials.token);
