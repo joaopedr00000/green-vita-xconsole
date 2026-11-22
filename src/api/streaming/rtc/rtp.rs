@@ -13,6 +13,10 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 const MAX_PENDING_AUDIO_PACKETS: usize = 32;
+// Allow brief cross-frame reordering while RTCP NACK asks for missing RTP.
+// Bounded to roughly two frames so Vita latency stays low.
+const VIDEO_REORDER_GRACE: std::time::Duration = std::time::Duration::from_millis(32);
+const MAX_HELD_FUTURE_PACKETS: usize = 48;
 const MAX_H264_ACCESS_UNIT_BYTES: usize = 2 * 1024 * 1024;
 const VIDEO_RTP_CLOCK_RATE: u32 = 90_000;
 const AUDIO_MAX_LATE_PACKETS: u16 = 32;
@@ -24,6 +28,18 @@ pub(super) struct VideoSampleStats {
     pub dropped: u32,
     pub source_frame_duration_us: Option<u64>,
     pub encoded_resolution: Option<(u32, u32)>,
+}
+
+impl VideoSampleStats {
+    fn merge(&mut self, other: Self) {
+        self.dropped = self.dropped.saturating_add(other.dropped);
+        if other.source_frame_duration_us.is_some() {
+            self.source_frame_duration_us = other.source_frame_duration_us;
+        }
+        if other.encoded_resolution.is_some() {
+            self.encoded_resolution = other.encoded_resolution;
+        }
+    }
 }
 
 pub(super) struct AudioRtp {
@@ -64,6 +80,7 @@ pub(super) struct VideoRtp {
     damage_score: u8,
     stream_too_large: bool,
     waiting_for_keyframe: bool,
+    held_future: Vec<Packet>,
 }
 
 struct PendingVideoFrame {
@@ -162,6 +179,7 @@ impl VideoRtp {
             damage_score: 0,
             stream_too_large: false,
             waiting_for_keyframe: false,
+            held_future: Vec::new(),
         }
     }
 
@@ -173,7 +191,48 @@ impl VideoRtp {
         self.waiting_for_keyframe = true;
     }
 
+    /// Keep a small frame lookahead when a newer timestamp arrives before
+    /// the old frame's missing RTP packet. NACK then has one brief chance to
+    /// repair it instead of us immediately discarding the whole frame.
     pub(super) fn receive(
+        &mut self,
+        worker: &VideoDecodeWorker,
+        packet: Packet,
+        keyframe_requested: &mut bool,
+    ) -> VideoSampleStats {
+        let mut combined = VideoSampleStats::default();
+        if let Some(pending) = &self.pending
+            && pending.timestamp != packet.header.timestamp
+            && timestamp_is_newer(packet.header.timestamp, pending.timestamp) {
+            if pending.first_packet_at.elapsed() < VIDEO_REORDER_GRACE
+                && self.held_future.len() < MAX_HELD_FUTURE_PACKETS
+                && self.held_future.first().is_none_or(|item|
+                    item.header.timestamp == packet.header.timestamp)
+            {
+                self.held_future.push(packet);
+                return combined;
+            }
+            // The wait expired or the next frame has started. Handle buffered
+            // RTP in arrival order before the newest timestamp.
+            let buffered = std::mem::take(&mut self.held_future);
+            for item in buffered {
+                combined.merge(self.receive_one(worker, item, keyframe_requested));
+            }
+        }
+        combined.merge(self.receive_one(worker, packet, keyframe_requested));
+        if !self.held_future.is_empty()
+            && self.pending.as_ref().is_none_or(|pending|
+                pending.timestamp == self.held_future[0].header.timestamp)
+        {
+            let buffered = std::mem::take(&mut self.held_future);
+            for item in buffered {
+                combined.merge(self.receive_one(worker, item, keyframe_requested));
+            }
+        }
+        combined
+    }
+
+    fn receive_one(
         &mut self,
         worker: &VideoDecodeWorker,
         packet: Packet,
