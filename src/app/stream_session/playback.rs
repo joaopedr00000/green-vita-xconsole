@@ -10,11 +10,13 @@ impl App {
 
         let (closed, error) = streaming.drain_backend_events();
         if let Some(error) = error {
+            crate::diagnostics::failure("webrtc_error", &error);
             self.stop_stream_with_error("error-webrtc-session", error.to_string())
                 .await;
             return Ok(());
         }
         if closed {
+            crate::diagnostics::step("webrtc_connection", "CLOSED");
             if !self.try_original_web_after_console_error().await {
                 self.exit_stream().await;
             }
@@ -33,6 +35,7 @@ impl App {
 
     async fn stop_stream_with_error(&mut self, reason_key: &'static str, error: String) {
         if self.try_original_web_after_console_error().await {
+            crate::diagnostics::step("webrtc_fallback", "XGPUWEB_REQUESTED");
             eprintln!("Experimental console RTC error; restored xgpuweb: {error}");
             return;
         }
