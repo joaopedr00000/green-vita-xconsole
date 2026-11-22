@@ -1,4 +1,5 @@
 use crate::api::streaming::rtc::rtp;
+use crate::api::streaming::rtc::bitrate::AdaptiveBitrate;
 use crate::streaming::video::{DecodedFrame, DecoderConfig, DirectVideoOutput, VideoDecodeWorker};
 use anyhow::Result;
 use bytes::Bytes;
@@ -30,6 +31,9 @@ pub(crate) struct VideoReceiver {
     pub(crate) received_packet: bool,
     last_stats_report: Instant,
     stats: VideoStats,
+    bitrate: AdaptiveBitrate,
+    last_decoder_error_logged: Option<Instant>,
+    pending_recovery_log: bool,
 }
 
 impl VideoReceiver {
@@ -48,6 +52,9 @@ impl VideoReceiver {
             received_packet: false,
             last_stats_report: Instant::now(),
             stats: VideoStats::default(),
+            bitrate: AdaptiveBitrate::new(),
+            last_decoder_error_logged: None,
+            pending_recovery_log: false,
         })
     }
 
@@ -68,11 +75,13 @@ impl VideoReceiver {
 
     pub(crate) fn receive(&mut self, packet: Packet, keyframe_requested: &mut bool) {
         self.received_packet = true;
+        self.bitrate.packet_received();
         let sample_stats = self.rtp.receive(&self.decoder, packet, keyframe_requested);
         self.stats.dropped = self
             .stats
             .dropped
             .saturating_add(sample_stats.dropped as u64);
+        self.bitrate.frame_damaged(sample_stats.dropped as u64);
         if sample_stats.source_frame_duration_us.is_some() {
             self.stats.last_sample_duration_us = sample_stats.source_frame_duration_us;
         }
@@ -92,6 +101,10 @@ impl VideoReceiver {
         {
             match result {
                 Ok(frame) => {
+                    if self.pending_recovery_log {
+                        crate::diagnostics::step("h264_decoder", "RECOVERED_AFTER_ERROR");
+                        self.pending_recovery_log = false;
+                    }
                     self.next_frame_id = self.next_frame_id.wrapping_add(1);
                     self.latest_frame = Some((self.next_frame_id, frame));
                 }
@@ -104,9 +117,36 @@ impl VideoReceiver {
         }
 
         if decode_errors > 0 {
+            let now = Instant::now();
+            if self.last_decoder_error_logged.is_none_or(|old| {
+                now.duration_since(old) >= Duration::from_secs(3)
+            }) {
+                crate::diagnostics::step("h264_decoder", "RESET_AND_KEYFRAME_REQUESTED");
+                self.last_decoder_error_logged = Some(now);
+            }
+            self.pending_recovery_log = true;
+            self.bitrate.frame_damaged(decode_errors.saturating_mul(2));
             self.stats.decode_errors = self.stats.decode_errors.saturating_add(decode_errors);
             self.decoder.reset_decoder();
             self.rtp.wait_for_keyframe();
+        }
+    }
+
+    /// RTCP REMB is a bounded receiver request; the service may ignore it.
+    /// Never send 1080p/1440p metadata or renegotiate a larger decoder surface.
+    pub(crate) fn adapt_bitrate(&mut self, peer: &mut RTCPeerConnection, now: Instant) {
+        let Some(bitrate) = self.bitrate.sample(now) else { return; };
+        if let (Some(receiver_id), Some(ssrc)) = (self.receiver_id, self.ssrc)
+            && let Some(mut receiver) = peer.rtp_receiver(receiver_id) {
+            let feedback = rtcp::payload_feedbacks::receiver_estimated_maximum_bitrate::
+                ReceiverEstimatedMaximumBitrate {
+                    sender_ssrc: 0,
+                    bitrate: bitrate as f32,
+                    ssrcs: vec![ssrc],
+                };
+            if let Err(error) = receiver.write_rtcp(vec![Box::new(feedback)]) {
+                eprintln!("720p bitrate feedback could not be sent: {error}");
+            }
         }
     }
 
@@ -142,7 +182,8 @@ impl VideoReceiver {
             .map(|(width, height)| format!("{width}x{height}"))
             .unwrap_or_else(|| "?".to_owned());
         Some(format!(
-            "enc:{encoded_resolution} srcfps:{source_fps} {performance} wait:{} drop:{} err:{}",
+            "enc:{encoded_resolution} srcfps:{source_fps} {performance} remb:{:.1}Mbps wait:{} drop:{} err:{}",
+            self.bitrate.current_mbps(),
             u8::from(self.rtp.waiting_for_keyframe()),
             self.stats.dropped,
             self.stats.decode_errors,
