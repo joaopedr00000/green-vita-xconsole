@@ -1,10 +1,9 @@
 name: Build and release VPK
 
+# The first release is already published. Avoid creating an unrelated
+# v0.1.8 release when the experimental build becomes the default branch.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - master
 
 permissions:
   contents: write
