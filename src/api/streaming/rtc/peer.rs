@@ -2,9 +2,6 @@ use anyhow::{Context, Result};
 use rtc::data_channel::{RTCDataChannelId, RTCDataChannelInit};
 use rtc::peer_connection::configuration::RTCConfigurationBuilder;
 use rtc::peer_connection::configuration::media_engine::MediaEngine;
-use rtc::peer_connection::configuration::interceptor_registry::{
-    configure_nack, configure_rtcp_reports, Registry,
-};
 use rtc::peer_connection::configuration::setting_engine::SettingEngine;
 use rtc::peer_connection::transport::RTCIceServer;
 use rtc::peer_connection::{RTCPeerConnection, RTCPeerConnectionBuilder};
@@ -22,7 +19,7 @@ pub(crate) struct RtcDataChannelConfig {
 /// Builds the provider-neutral WebRTC peer. Providers supply only their negotiated codecs,
 /// ICE servers and data-channel descriptions.
 pub(crate) fn create(
-    mut media_engine: MediaEngine,
+    media_engine: MediaEngine,
     ice_servers: Vec<RTCIceServer>,
     channels: &[RtcDataChannelConfig],
 ) -> Result<(RTCPeerConnection, Vec<RTCDataChannelId>)> {
@@ -32,16 +29,10 @@ pub(crate) fn create(
     let mut setting_engine = SettingEngine::default();
     setting_engine.set_ice_connection_attempts(Some(Duration::from_millis(200)), Some(75));
 
-    // Advertising "nack" in SDP alone is insufficient: install the receiver-side
-    // interceptor that actually detects missing RTP and sends RTCP NACK.
-    // Keep reports lightweight; TWCC video congestion feedback isn't needed on Vita.
-    let interceptor_registry = configure_nack(Registry::new(), &mut media_engine);
-    let interceptor_registry = configure_rtcp_reports(interceptor_registry);
     let mut peer = RTCPeerConnectionBuilder::new()
         .with_configuration(configuration)
         .with_setting_engine(setting_engine)
         .with_media_engine(media_engine)
-        .with_interceptor_registry(interceptor_registry)
         .build()
         .context("failed to create rtc peer connection")?;
 
