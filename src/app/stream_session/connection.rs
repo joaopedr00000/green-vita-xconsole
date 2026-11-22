@@ -90,6 +90,14 @@ pub(in crate::app) async fn cleanup_active_sessions(api: &ApiClient, kind: Strea
 
 impl App {
     pub(in crate::app) fn start_stream_for_target(&mut self, target: StreamStartTarget) {
+        crate::diagnostics::step("game_launch", "CLOUD_SESSION_REQUESTED");
+        if let Some(game_id) = target.game_id.as_deref() {
+            if let Some(game) = self.service.titles.iter().find(|game| game.id == game_id) {
+                crate::diagnostics::allowed_devices(&game.allowed_device_types);
+            } else {
+                crate::diagnostics::step("catalog_allowed_device_types", "TITLE_NOT_IN_WEB_CATALOG");
+            }
+        }
         let api = self.service.api.clone();
         let kind = target.kind;
         let target_id = target.target_id.clone();
@@ -104,6 +112,7 @@ impl App {
     /// fails. Never attempts console again for this launch, preventing retry loops.
     pub(super) fn start_web_fallback(&mut self, target: StreamStartTarget) {
         eprintln!("Console session failed; switching to original xgpuweb streaming");
+        crate::diagnostics::step("fallback", "XGPUWEB_REQUESTED");
         let api = self.service.api.clone();
         let target_id = target.target_id.clone();
         let job = Some(tokio::spawn(async move {
@@ -166,6 +175,7 @@ impl App {
                         wait_estimate_job: None,
                     },
                     PollJob::Done(Err(error)) => {
+                        crate::diagnostics::failure("game_session_start", &format!("{error:#}"));
                         eprintln!(
                             "Failed to start {:?} stream for {}: {error:#}",
                             target.kind, target.label
@@ -255,6 +265,7 @@ impl App {
                             && session.stream.is_console;
                         let _ = session.stream.stop().await;
                         if console_attempt {
+                            crate::diagnostics::failure("console_rtc_start", &format!("{error:#}"));
                             eprintln!("Console WebRTC initialization refused: {error:#}");
                             let target = Self::web_fallback_target(&session);
                             self.start_web_fallback(target);
@@ -283,6 +294,7 @@ impl App {
             }
             Err(error) => {
                 if session.kind == StreamKind::Cloud && session.stream.is_console {
+                    crate::diagnostics::failure("console_provisioning", &format!("{error:#}"));
                     eprintln!("Console session rejected during provisioning: {error:#}");
                     let target = Self::web_fallback_target(&session);
                     let _ = session.stream.stop().await;
