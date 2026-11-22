@@ -16,6 +16,9 @@ pub struct Game {
     pub launch_id: String,
     /// Opaque identifier used when the provider loads additional metadata.
     pub metadata_id: Option<String>,
+    /// Device classes returned by Xbox (not proof of entitlement or successful launch).
+    #[serde(default)]
+    pub allowed_device_types: Vec<String>,
     pub details: Option<GameDetails>,
     #[serde(skip)]
     pub icon: Option<Arc<TitleImage>>,
