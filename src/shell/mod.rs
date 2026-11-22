@@ -245,7 +245,11 @@ pub async fn run(mut app: App) -> Result<()> {
         // Refresh controls after potentially expensive video/UI presentation,
         // rather than making an input change wait for the next render iteration.
         // pump_events updates SDL state; events are consumed by the regular loop.
-        if matches!(&app.state, AppState::Streaming(streaming) if !streaming.paused) {
+        // Keep short Back/View release taps visible to the RTC worker: they
+        // are a one-shot pulse, so don't overwrite them in the same UI frame.
+        if !relay_back_as_view
+            && matches!(&app.state, AppState::Streaming(streaming) if !streaming.paused)
+        {
             event_pump.pump_events();
             send_stream_gamepad_state(
                 &mut app,
