@@ -8,6 +8,10 @@ use std::net::SocketAddr;
 use std::time::Instant;
 use tokio::net::UdpSocket;
 
+// Never let an incoming RTP burst monopolize the RTC worker; the next pump
+// must have an opportunity to dispatch the newest gamepad state promptly.
+const MAX_DATAGRAMS_PER_PUMP: usize = 96;
+
 /// UDP/ICE transport shared by WebRTC streaming providers.
 pub(crate) struct RtcTransport {
     pub(crate) socket: UdpSocket,
@@ -68,7 +72,9 @@ impl RtcTransport {
     }
 
     pub(crate) fn receive(&mut self, peer: &mut RTCPeerConnection) {
-        loop {
+        // Tokio's UDP readable readiness remains set while more packets wait.
+        // A finite batch prevents controller input starvation under video bursts.
+        for _ in 0..MAX_DATAGRAMS_PER_PUMP {
             match self.socket.try_recv_from(&mut self.recv_buf) {
                 Ok((n, peer_addr)) => {
                     if let Err(error) = peer.handle_read(TaggedBytesMut {
