@@ -15,7 +15,9 @@ impl App {
             return Ok(());
         }
         if closed {
-            self.exit_stream().await;
+            if !self.try_original_web_after_console_error().await {
+                self.exit_stream().await;
+            }
             return Ok(());
         }
 
@@ -30,11 +32,33 @@ impl App {
     }
 
     async fn stop_stream_with_error(&mut self, reason_key: &'static str, error: String) {
+        if self.try_original_web_after_console_error().await {
+            eprintln!("Experimental console RTC error; restored xgpuweb: {error}");
+            return;
+        }
         let state = std::mem::replace(&mut self.state, AppState::ModeSelect { selected: 0 });
         if let Some(streaming) = state.into_streaming() {
             let _ = streaming.stop().await;
         }
         self.set_localized_error_screen(reason_key, error);
+    }
+
+    /// A console session can succeed at HTTP login/play but fail only after
+    /// WebRTC starts. Keep that failure invisible and restart once using
+    /// the original browser offering; web sessions never retry console.
+    async fn try_original_web_after_console_error(&mut self) -> bool {
+        let Some(target) = self.state.streaming()
+            .and_then(|streaming| streaming.web_fallback_target()) else {
+            return false;
+        };
+        let state = std::mem::replace(&mut self.state, AppState::ModeSelect { selected: 0 });
+        if let Some(streaming) = state.into_streaming() {
+            if let Err(error) = streaming.stop().await {
+                eprintln!("Could not stop rejected xgpuconsole session: {error:#}");
+            }
+        }
+        self.start_web_fallback(target);
+        true
     }
 
     pub(in crate::app) async fn exit_stream(&mut self) {
