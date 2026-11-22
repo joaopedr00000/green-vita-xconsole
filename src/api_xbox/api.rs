@@ -184,9 +184,14 @@ impl ApiClient {
                 let mut console_body = body.clone();
                 console_body["settings"]["sdkType"] = json!("console");
                 console_body["settings"]["osName"] = json!("XboxOne");
+                crate::diagnostics::step("xgpuconsole_session", "ATTEMPTING");
                 match self.start_stream_with_credentials(credentials, &path, &console_body, true).await {
-                    Ok(stream) => return Ok(stream),
+                    Ok(stream) => {
+                        crate::diagnostics::step("xgpuconsole_session", "CREATED_NOT_VIDEO_PROOF");
+                        return Ok(stream);
+                    },
                     Err(error) => {
+                        crate::diagnostics::failure("xgpuconsole_session", &format!("{error:#}"));
                         eprintln!("xgpuconsole session refused; retrying original xgpuweb: {error:#}");
                     }
                 }
@@ -197,11 +202,15 @@ impl ApiClient {
             .start_stream_with_credentials(self.config.cloud.clone(), &path, &body, false)
             .await
         {
-            Ok(stream) => Ok(stream),
+            Ok(stream) => {
+                crate::diagnostics::step("xgpuweb_session", "CREATED");
+                Ok(stream)
+            },
             Err(error) if error.to_string().contains("OfferingDoesNotContainTitle") => {
                 let Some(fallback) = self.config.cloud_f2p.clone() else {
                     return Err(error);
                 };
+                crate::diagnostics::step("xgpuwebf2p", "FALLBACK_REQUESTED");
                 self.start_stream_with_credentials(fallback, &path, &body, false)
                     .await
             }
