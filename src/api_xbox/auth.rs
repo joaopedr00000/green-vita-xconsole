@@ -29,6 +29,8 @@ pub struct StreamingCredentials {
     pub home: EndpointCredentials,
     pub cloud: EndpointCredentials,
     pub cloud_f2p: Option<EndpointCredentials>,
+    /// Optional experimental console offering, never required for normal xCloud login.
+    pub console_cloud: Option<EndpointCredentials>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -486,7 +488,7 @@ impl MsalAuth {
         let response: StreamingTokenResponse = self
             .post_json(
                 format!("https://{offering}.gssv-play-prod.xboxlive.com/v2/login/user"),
-                &[("x-gssv-client", "XboxComBrowser")],
+                &[("x-gssv-client", if offering == "xgpuconsole" { "XboxOne" } else { "XboxComBrowser" })],
                 &body,
                 &format!("streaming token (offering {offering})"),
             )
@@ -505,6 +507,19 @@ impl MsalAuth {
 
         let home = self.streaming_token(&gssv_token, "xhome").await?;
 
+        // Silently probe the console offering. A refusal must never prevent the
+        // unmodified xgpuweb / xgpuwebf2p flow from authenticating.
+        let console_cloud = match self.streaming_token(&gssv_token, "xgpuconsole").await {
+            Ok(credentials) => {
+                eprintln!("xgpuconsole token accepted; console session is not yet validated");
+                Some(credentials)
+            }
+            Err(error) => {
+                eprintln!("xgpuconsole token unavailable; falling back to xgpuweb: {error:#}");
+                None
+            }
+        };
+
         let primary = self.streaming_token(&gssv_token, "xgpuweb").await;
         let f2p = self.streaming_token(&gssv_token, "xgpuwebf2p").await;
 
@@ -518,6 +533,7 @@ impl MsalAuth {
             home,
             cloud,
             cloud_f2p,
+            console_cloud,
         })
     }
 
