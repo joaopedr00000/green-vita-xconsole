@@ -1,5 +1,6 @@
 //! WebRTC utilities shared by streaming providers.
 
+pub(crate) mod bitrate;
 pub(crate) mod ice;
 pub(crate) mod media;
 pub(crate) mod peer;
