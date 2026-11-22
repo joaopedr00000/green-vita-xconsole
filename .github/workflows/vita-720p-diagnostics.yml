@@ -1,0 +1,35 @@
+name: GreenVita 720p diagnostics and transport
+
+on:
+  push:
+    branches: [vita-720p-protocol-diagnostics, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: green-vita-720p-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/vita-rust/vitasdk-rs:latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Compile original GreenVita UI with 720p protocol improvements
+        env:
+          RUSTFLAGS: "-C target-feature=-neon"
+        run: cargo vita build vpk --release
+      - name: Upload PS Vita VPK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GreenVita-720p-XGPUConsole-Diagnostics
+          path: target/armv7-sony-vita-newlibeabihf/release/green-vita.vpk
+          retention-days: 14
+          if-no-files-found: error
