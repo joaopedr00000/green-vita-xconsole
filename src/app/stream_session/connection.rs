@@ -100,6 +100,28 @@ impl App {
         self.set_state(AppState::StartingStream { target, job });
     }
 
+    /// Retry only the original web offering after an experimental console session
+    /// fails. Never attempts console again for this launch, preventing retry loops.
+    pub(super) fn start_web_fallback(&mut self, target: StreamStartTarget) {
+        eprintln!("Console session failed; switching to original xgpuweb streaming");
+        let api = self.service.api.clone();
+        let target_id = target.target_id.clone();
+        let job = Some(tokio::spawn(async move {
+            api.start_web_stream(&target_id).await
+        }));
+        self.set_state(AppState::StartingStream { target, job });
+    }
+
+    fn web_fallback_target(session: &ConnectingStream) -> StreamStartTarget {
+        StreamStartTarget {
+            kind: session.kind,
+            target_id: session.target_id.clone(),
+            game_id: session.game_id.clone(),
+            label: session.label.clone(),
+            return_selected: session.return_selected,
+        }
+    }
+
     pub(in crate::app) fn start_selected_console_stream(&mut self) {
         let AppState::ConsoleList { selected } = &self.state else {
             return;
@@ -224,10 +246,23 @@ impl App {
                     session.kind,
                     title_id,
                     session.return_selected,
+                    session.target_id.clone(),
+                    session.label.clone(),
                 ) {
                     Ok(streaming) => Ok(AppState::Streaming(streaming)),
                     Err(error) => {
+                        let console_attempt = session.kind == StreamKind::Cloud
+                            && session.stream.is_console;
                         let _ = session.stream.stop().await;
+                        if console_attempt {
+                            eprintln!("Console WebRTC initialization refused: {error:#}");
+                            let target = Self::web_fallback_target(&session);
+                            self.start_web_fallback(target);
+                            let state = std::mem::replace(
+                                &mut self.state, AppState::ModeSelect { selected: 0 }
+                            );
+                            return Ok(state);
+                        }
                         eprintln!("Failed to start WebRTC session: {error:#}");
                         Ok(self.localized_error_state(
                             "error-webrtc-negotiation",
@@ -247,6 +282,16 @@ impl App {
                 })
             }
             Err(error) => {
+                if session.kind == StreamKind::Cloud && session.stream.is_console {
+                    eprintln!("Console session rejected during provisioning: {error:#}");
+                    let target = Self::web_fallback_target(&session);
+                    let _ = session.stream.stop().await;
+                    self.start_web_fallback(target);
+                    let state = std::mem::replace(
+                        &mut self.state, AppState::ModeSelect { selected: 0 }
+                    );
+                    return Ok(state);
+                }
                 let message = error.to_string();
                 session.consecutive_failures += 1;
                 eprintln!(
