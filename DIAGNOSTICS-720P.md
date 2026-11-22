@@ -43,8 +43,9 @@ entitlements or reproduce physical Xbox cryptographic proof.
 
 ## Transport improvements
 
-- True RTCP **NACK** interception (rather than just advertising `nack`
-  in the SDP), plus receiver reports.
+- Explicit receiver-side RTCP **NACK** requests for missing video RTP
+  packets, rather than just advertising `nack` in the SDP; bounded to
+  24 missing packet reports per request with an expiry of 180 ms.
 - A bounded **32 ms / 48 RTP-packet** cross-frame H.264 reorder grace.
   NACK has an opportunity to recover missing packets before an IDR restart.
 - Receiver **REMB** requests every 5 seconds (and after congestion changes),
