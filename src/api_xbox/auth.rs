@@ -10,6 +10,9 @@ const OAUTH_SCOPE: &str = "xboxlive.signin openid profile offline_access";
 const TOKEN_STORE_DIR: &str = "ux0:data/xcloud-rust";
 const TOKEN_STORE_PATH: &str = "ux0:data/xcloud-rust/xcloud-tokens.json";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// A public example Xbox One Edge UA, not hardware authentication.
+const XBOX_ONE_USER_AGENT: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; Xbox; Xbox One) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edge/44.18363.8131";
 const TOKEN_STORE_VERSION: u8 = 1;
 const TOKEN_KEY_MAGIC: &[u8; 8] = b"GVTKEY01";
 const TOKEN_KEY_SIZE: usize = 32;
@@ -485,10 +488,15 @@ impl MsalAuth {
             "offeringId": offering,
         });
 
+        let headers: &[(&str, &str)] = if offering == "xgpuconsole" {
+            &[("x-gssv-client", "XboxOne"), ("User-Agent", XBOX_ONE_USER_AGENT)]
+        } else {
+            &[("x-gssv-client", "XboxComBrowser")]
+        };
         let response: StreamingTokenResponse = self
             .post_json(
                 format!("https://{offering}.gssv-play-prod.xboxlive.com/v2/login/user"),
-                &[("x-gssv-client", if offering == "xgpuconsole" { "XboxOne" } else { "XboxComBrowser" })],
+                headers,
                 &body,
                 &format!("streaming token (offering {offering})"),
             )
