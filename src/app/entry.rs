@@ -154,6 +154,7 @@ impl App {
                 self.service.api.config.home = credentials.home;
                 self.service.api.config.cloud = credentials.cloud;
                 self.service.api.config.cloud_f2p = credentials.cloud_f2p;
+                self.service.api.config.console_cloud = credentials.console_cloud;
                 self.service.auth = auth;
                 self.service.refresh_xcloud_catalog_backend();
                 if let Some(profile) = profile {
