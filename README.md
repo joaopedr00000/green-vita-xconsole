@@ -26,8 +26,8 @@
 You need a homebrew-enabled PS Vita with VitaShell and an Xbox account that has
 access to Xbox Cloud Gaming.
 
-1. Download `green-vita.vpk` from the
-   [latest release](https://github.com/Day-OS/green-vita/releases/latest).
+1. Download `green-vita-xgpuconsole-experimental.vpk` from the
+   [first experimental release](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/Test).
 2. Transfer the VPK to the Vita.
 3. Install it with VitaShell.
 4. Launch GreenVita and complete the device-code sign-in.
@@ -35,6 +35,12 @@ access to Xbox Cloud Gaming.
 > [!IMPORTANT]
 > Enable **Unsafe Homebrew** in HENkaku Settings. GreenVita needs access to the
 > Vita hardware video-decoder module.
+
+## Experimental Xbox One connection
+
+This fork keeps the original GreenVita interface, settings, controller support, xCloud and xHome features. When connecting to Xbox Cloud Gaming, it automatically tries the `xgpuconsole` offering with Xbox One client metadata and silently falls back to the original `xgpuweb`/`xgpuwebf2p` connection when the console attempt fails. The console attempt is **experimental** and does not provide genuine Xbox hardware authentication, guarantee game compatibility or bypass Microsoft's server-side access controls.
+
+The original source project is [Day-OS/green-vita](https://github.com/Day-OS/green-vita). This fork includes the extra console-offering experiment.
 
 ## Build
 
