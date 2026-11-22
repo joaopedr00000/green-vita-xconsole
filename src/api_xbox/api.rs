@@ -12,12 +12,17 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 const DEVICE_INFO_JSON: &str = r#"{"appInfo":{"env":{"clientAppId":"www.xbox.com","clientAppType":"browser","clientAppVersion":"26.1.97","clientSdkVersion":"10.3.7","httpEnvironment":"prod","sdkInstallId":""}},"dev":{"hw":{"make":"Microsoft","model":"unknown","sdktype":"web"},"os":{"name":"android","ver":"22631.2715","platform":"desktop"},"displayInfo":{"dimensions":{"widthInPixels":1280,"heightInPixels":720},"pixelDensity":{"dpiX":1,"dpiY":1}},"browser":{"browserName":"chrome","browserVersion":"140.0.3485.54"}}}"#;
 
+/// Experimental console client metadata; server-side hardware checks may reject it.
+const XBOX_ONE_DEVICE_INFO_JSON: &str = r#"{"appInfo":{"env":{"clientAppId":"XboxOne","clientAppType":"console","clientAppVersion":"10.0.22621","clientSdkVersion":"10.3.7","httpEnvironment":"prod","sdkInstallId":""}},"dev":{"hw":{"make":"Microsoft","model":"Xbox One","sdktype":"console"},"os":{"name":"XboxOne","ver":"10.0.22621","platform":"console"},"displayInfo":{"dimensions":{"widthInPixels":1280,"heightInPixels":720},"pixelDensity":{"dpiX":1,"dpiY":1}}}}"#;
+
 #[derive(Debug, Clone)]
 pub struct ApiClientConfig {
     pub locale: String,
     pub home: EndpointCredentials,
     pub cloud: EndpointCredentials,
     pub cloud_f2p: Option<EndpointCredentials>,
+    /// Optional xgpuconsole token. Normal catalog and Remote Play use original tokens.
+    pub console_cloud: Option<EndpointCredentials>,
 }
 
 impl Default for ApiClientConfig {
@@ -33,6 +38,7 @@ impl Default for ApiClientConfig {
                 token: String::new(),
             },
             cloud_f2p: None,
+            console_cloud: None,
         }
     }
 }
@@ -128,9 +134,23 @@ impl ApiClient {
         self.delete_json(kind, &path).await
     }
 
-    /// Creates a streaming session. Cloud titles missing from the primary offering are retried
-    /// against the free-to-play endpoint when one is available.
+    /// Original entry point, now with a silent xgpuconsole-first attempt for cloud play.
+    /// The game catalog and all other requests remain on the original web offering.
     pub async fn start_stream(&self, kind: StreamKind, title_or_server_id: &str) -> Result<Stream> {
+        self.start_stream_internal(kind, title_or_server_id, true).await
+    }
+
+    /// Original xgpuweb flow without a console retry; called after a console session fails.
+    pub(crate) async fn start_web_stream(&self, title_id: &str) -> Result<Stream> {
+        self.start_stream_internal(StreamKind::Cloud, title_id, false).await
+    }
+
+    async fn start_stream_internal(
+        &self,
+        kind: StreamKind,
+        title_or_server_id: &str,
+        allow_console: bool,
+    ) -> Result<Stream> {
         let body = json!({
             "clientSessionId": "",
             "titleId": if kind == StreamKind::Cloud { title_or_server_id } else { "" },
@@ -153,12 +173,26 @@ impl ApiClient {
 
         if kind == StreamKind::Home {
             return self
-                .start_stream_with_credentials(self.config.home.clone(), &path, &body)
+                .start_stream_with_credentials(self.config.home.clone(), &path, &body, false)
                 .await;
         }
 
+        if allow_console {
+            if let Some(credentials) = self.config.console_cloud.clone() {
+                let mut console_body = body.clone();
+                console_body["settings"]["sdkType"] = json!("console");
+                console_body["settings"]["osName"] = json!("XboxOne");
+                match self.start_stream_with_credentials(credentials, &path, &console_body, true).await {
+                    Ok(stream) => return Ok(stream),
+                    Err(error) => {
+                        eprintln!("xgpuconsole session refused; retrying original xgpuweb: {error:#}");
+                    }
+                }
+            }
+        }
+
         match self
-            .start_stream_with_credentials(self.config.cloud.clone(), &path, &body)
+            .start_stream_with_credentials(self.config.cloud.clone(), &path, &body, false)
             .await
         {
             Ok(stream) => Ok(stream),
@@ -166,7 +200,7 @@ impl ApiClient {
                 let Some(fallback) = self.config.cloud_f2p.clone() else {
                     return Err(error);
                 };
-                self.start_stream_with_credentials(fallback, &path, &body)
+                self.start_stream_with_credentials(fallback, &path, &body, false)
                     .await
             }
             Err(error) => Err(error),
@@ -178,11 +212,12 @@ impl ApiClient {
         credentials: EndpointCredentials,
         path: &str,
         body: &Value,
+        is_console: bool,
     ) -> Result<Stream> {
         let response: StartStreamResponse = self
             .request_json(&credentials, Method::POST, path, Some(body))
             .await?;
-        Ok(Stream::new(self.clone(), credentials, response))
+        Ok(Stream::new(self.clone(), credentials, response, is_console))
     }
 
     pub async fn get_json<T>(&self, kind: StreamKind, path: &str) -> Result<T>
@@ -214,13 +249,16 @@ impl ApiClient {
         T: for<'de> Deserialize<'de>,
     {
         let url = format!("{}{}", credentials.host, path);
+        let is_console = self.config.console_cloud.as_ref()
+            .is_some_and(|console| console.host == credentials.host
+                && console.token == credentials.token);
         let mut request = self
             .client
             .request(method, url)
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
-            .header("X-Gssv-Client", "XboxComBrowser")
-            .header("X-MS-Device-Info", DEVICE_INFO_JSON);
+            .header("X-Gssv-Client", if is_console { "XboxOne" } else { "XboxComBrowser" })
+            .header("X-MS-Device-Info", if is_console { XBOX_ONE_DEVICE_INFO_JSON } else { DEVICE_INFO_JSON });
 
         if !credentials.token.is_empty() {
             request = request.bearer_auth(&credentials.token);
