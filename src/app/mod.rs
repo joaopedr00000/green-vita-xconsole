@@ -35,6 +35,8 @@ pub struct App {
     pub(crate) title_initial_overlay: Option<TitleInitialOverlay>,
     pub(crate) title_search_query: String,
     pub(crate) title_search_requested: bool,
+    /// At most one automatic stream rejoin per user-initiated launch.
+    pub(crate) auto_reconnect_used: bool,
 }
 
 impl App {
@@ -49,6 +51,7 @@ impl App {
             title_initial_overlay: None,
             title_search_query: String::new(),
             title_search_requested: false,
+            auto_reconnect_used: false,
             settings,
         })
     }
