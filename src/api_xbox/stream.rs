@@ -50,6 +50,8 @@ pub struct Stream {
 #[derive(Deserialize)]
 struct StateResponse {
     state: String,
+    #[serde(rename = "errorDetails", default)]
+    error_details: Option<Value>,
 }
 
 impl Stream {
@@ -94,7 +96,28 @@ impl Stream {
                 None,
             )
             .await?;
-        self.state = StreamState::from_api(&response.state);
+        let new_state = StreamState::from_api(&response.state);
+        if new_state != self.state {
+            if self.is_console {
+                match new_state {
+                    StreamState::Provisioning => crate::diagnostics::step("console_state", "PROVISIONING"),
+                    StreamState::WaitingForResources => crate::diagnostics::step("console_state", "WAITING_FOR_RESOURCES"),
+                    StreamState::ReadyToConnect => crate::diagnostics::step("console_state", "READY_TO_CONNECT"),
+                    StreamState::Provisioned => crate::diagnostics::step("console_state", "PROVISIONED_NOT_VIDEO_PROOF"),
+                    StreamState::New | StreamState::Error => {},
+                }
+            }
+        }
+        self.state = new_state;
+        if new_state == StreamState::Error {
+            // The service may include errorDetails.code; never expose raw JSON or secrets.
+            let code = response.error_details.as_ref()
+                .and_then(|value| value.get("code").or_else(|| value.get("errorCode")))
+                .and_then(Value::as_str)
+                .unwrap_or("UNCLASSIFIED_FAILURE");
+            crate::diagnostics::failure("session_state", code);
+            anyhow::bail!("stream session rejected: {}", crate::diagnostics::error_code(code));
+        }
         Ok(self.state)
     }
 
