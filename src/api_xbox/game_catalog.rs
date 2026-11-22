@@ -58,6 +58,8 @@ struct TitleDetails {
     programs: Vec<String>,
     #[serde(rename = "userSubscriptions", default)]
     user_subscriptions: Vec<String>,
+    #[serde(rename = "allowedDeviceTypes", default)]
+    allowed_device_types: Vec<String>,
 }
 
 fn extract_games(value: &serde_json::Value) -> Vec<Game> {
@@ -83,6 +85,7 @@ fn extract_games(value: &serde_json::Value) -> Vec<Game> {
                 id: slug.clone(),
                 launch_id: slug,
                 metadata_id: entry.details.product_id,
+                allowed_device_types: entry.details.allowed_device_types,
                 details: None,
                 icon: None,
                 box_art: None,
@@ -91,6 +94,7 @@ fn extract_games(value: &serde_json::Value) -> Vec<Game> {
         })
         .collect();
 
+    crate::diagnostics::step("catalog", "LOADED_FROM_WEB_OFFERING");
     games.sort_by(|left, right| left.id.cmp(&right.id));
     games.dedup_by(|left, right| left.id == right.id);
     games
