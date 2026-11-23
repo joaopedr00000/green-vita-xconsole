@@ -49,8 +49,9 @@ entitlements or reproduce physical Xbox cryptographic proof.
 - A bounded **32 ms / 48 RTP-packet** cross-frame H.264 reorder grace.
   NACK has an opportunity to recover missing packets before an IDR restart.
 - Receiver **REMB** requests every 5 seconds (and after congestion changes),
-  starting at 6 Mbps; packet/frame loss lowers the request by 20%, repeated
-  clean windows raise it slowly, range **2.5–8 Mbps**.
+  starting at 6 Mbps; packet/frame damage lowers the request by 20%, repeated
+  clean windows increase it by 1 Mbps every 20 seconds, range **2.5–15 Mbps**.
+  The 15 Mbps ceiling is experimental and is not a guaranteed video bitrate.
 - Existing keyframe/PLI, H.264 hardware-decoder reset and 720p SPS
   limit remain in force. A decoding error/recovery writes one bounded
   diagnostic event; it does not cause an unbounded retry loop.
