@@ -21,6 +21,7 @@ A PS4 Remote Play session on the same LAN, or an appropriate local streaming ser
 3. **Bounded audio latency:** adjust playback startup from 80 to **60 ms** and audio output backlog cap from 240 to **160 ms**. This prevents sound from trailing a live picture excessively; sparse/unstable Wi-Fi may produce more dropouts, so validate on a physical PS Vita.
 4. **Input queue telemetry:** `inputq:` measures microseconds from local controller sampling to actual successful dispatch through the RTC data-channel method; this is **not** the same as end-to-end controller-to-screen latency. Enable Settings -> stream debug view to inspect it.
 5. **Existing stream metrics:** `rx:` is received video RTP payload Mbps, `remb:` is an unconfirmed requested bitrate, `nack:` counts successfully submitted RTCP NACK requests and sequence references.
+6. **15 Mbps requested bitrate ceiling (experimental):** the RTCP REMB adaptive feedback starts at 6 Mbps, increases by 1 Mbps after each 20-second damage-free interval up to 15 Mbps, and still cuts the request by 20% on repeated frame damage. This changes a requested upper bound, not a guaranteed server encoder bitrate or resolution. Check `rx:` against `remb:`; do not confuse their values. Allow approximately 3 minutes of clean video for the request to reach the new ceiling, and compare visual artifacts and dropped frames with the previous build.
 
 ## Tests / rollback conditions
 
@@ -37,7 +38,7 @@ Test both stable 720p30 and 720p60 titles, if a title/server offers them. This c
 - Frame queue age histogram from RTP arrival to actual screen flip; distinguish this from decoder-only time.
 - Smart audio headroom (e.g. 50–100 ms on other platforms) with recovery without hard queue clears.
 - Validate Vita's SDL2/GXM presentation path before experimenting with VSync bypass; an unsynchronized display flip can cause tearing or unstable frame pacing.
-- Optional conservative bitrate cap after measuring loss (test 2.5–4 Mbps) instead of requesting high 8Mbps under congested Wi-Fi.
+- If Wi-Fi is congested or NACK/drop counters rise, consider a conservative 2.5–4 Mbps ceiling instead of the optional 15 Mbps maximum request.
 - Optional LAN-friendly Xbox Remote Play when available; does not rely on cloud-console entitlement trickery.
 
 ## Practical network checklist
