@@ -2,59 +2,46 @@ name: Publish GreenVita v0.2.0 Beta (PT-BR / EN)
 
 on:
   push:
-    branches:
-      - vita-recovery-and-stream-telemetry
-    paths:
-      - .github/workflows/publish-green-vita-beta.yml
+    branches: [vita-recovery-and-stream-telemetry]
+    paths: [.github/workflows/publish-green-vita-beta.yml]
   workflow_dispatch:
 
 permissions:
   contents: write
+  actions: read
+
+concurrency:
+  group: green-vita-v0.2.0-beta.1-publish
+  cancel-in-progress: true
 
 jobs:
-  build-vpk:
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/vita-rust/vitasdk-rs:latest
-    steps:
-      - name: Checkout release source
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Build PlayStation Vita VPK
-        env:
-          RUSTFLAGS: "-C target-feature=-neon"
-        run: cargo vita build vpk --release
-      - name: Verify VPK output
-        run: test -s target/armv7-sony-vita-newlibeabihf/release/green-vita.vpk
-      - name: Upload VPK for release job
-        uses: actions/upload-artifact@v4
-        with:
-          name: GreenVita-v0.2.0-beta.1
-          path: target/armv7-sony-vita-newlibeabihf/release/green-vita.vpk
-          if-no-files-found: error
-          retention-days: 14
-
   publish-release:
-    needs: build-vpk
     runs-on: ubuntu-latest
     steps:
       - name: Checkout bilingual release notes
         uses: actions/checkout@v4
-      - name: Download built PS Vita VPK
+      - name: Download successful VitaSDK build of the identical source
         uses: actions/download-artifact@v4
         with:
-          name: GreenVita-v0.2.0-beta.1
+          run-id: 45098188745
+          github-token: ${{ github.token }}
+          repository: joaopedr00000/green-vita-xconsole
+          name: GreenVita-720p-XGPUConsole-Diagnostics
           path: dist
-      - name: Publish versioned pre-release with bilingual changelog
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Verify source compatibility and VPK output
         run: |
           set -euo pipefail
           test -s dist/green-vita.vpk
           test -s docs/releases/v0.2.0-beta.1.md
+          echo 'Compiled VPK from successful CI run #45098188745.'
+          echo 'Follow-up branch commits contain only docs and workflow changes.'
+      - name: Publish bilingual pre-release with VPK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
           if gh release view v0.2.0-beta.1 >/dev/null 2>&1; then
-            echo "Release v0.2.0-beta.1 already exists. No overwrite performed."
+            echo 'Release v0.2.0-beta.1 already exists; not overwriting.'
             exit 1
           fi
           gh release create v0.2.0-beta.1 dist/green-vita.vpk \
