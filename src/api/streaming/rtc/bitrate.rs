@@ -3,11 +3,12 @@
 use std::time::{Duration, Instant};
 
 const MIN_BPS: u32 = 2_500_000;
-const MAX_BPS: u32 = 8_000_000;
+const MAX_BPS: u32 = 15_000_000;
 const START_BPS: u32 = 6_000_000;
 const WINDOW: Duration = Duration::from_secs(3);
 const FEEDBACK_INTERVAL: Duration = Duration::from_secs(5);
 const CLEAN_INCREASE_INTERVAL: Duration = Duration::from_secs(20);
+const CLEAN_INCREASE_STEP_BPS: u32 = 1_000_000;
 
 pub(crate) struct AdaptiveBitrate {
     target_bps: u32,
@@ -56,7 +57,7 @@ impl AdaptiveBitrate {
                 self.last_increase = now;
             } else if self.damaged_frames == 0
                 && now.duration_since(self.last_increase) >= CLEAN_INCREASE_INTERVAL {
-                let increased = self.target_bps.saturating_add(250_000).min(MAX_BPS);
+                let increased = self.target_bps.saturating_add(CLEAN_INCREASE_STEP_BPS).min(MAX_BPS);
                 changed = increased != self.target_bps;
                 self.target_bps = increased;
                 self.last_increase = now;
@@ -83,7 +84,7 @@ impl AdaptiveBitrate {
 mod tests {
     use super::*;
     #[test]
-    fn never_requests_more_than_720p_budget() {
+    fn never_requests_more_than_15mbps_720p_budget() {
         let start = Instant::now();
         let mut control = AdaptiveBitrate::new();
         assert_eq!(control.sample(start), None);
@@ -97,6 +98,18 @@ mod tests {
         }
         assert!(control.target_bps >= MIN_BPS);
         assert!(control.target_bps <= START_BPS);
+    }
+    #[test]
+    fn reaches_15mbps_without_ever_exceeding_it_on_clean_stream() {
+        let start = Instant::now();
+        let mut control = AdaptiveBitrate::new();
+        for i in 0..=100 {
+            control.packet_received();
+            let now = start + Duration::from_secs(i * 3);
+            let _ = control.sample(now);
+            assert!((MIN_BPS..=MAX_BPS).contains(&control.target_bps));
+        }
+        assert_eq!(control.target_bps, 15_000_000);
     }
     #[test]
     fn recovers_gradually_after_clean_period() {
