@@ -1,0 +1,51 @@
+name: Publish GreenVita v0.2.0 Beta (PT-BR / EN)
+
+on:
+  push:
+    branches: [vita-recovery-and-stream-telemetry]
+    paths: [.github/workflows/publish-green-vita-beta.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: green-vita-v0.2.0-beta.1-publish
+  cancel-in-progress: true
+
+jobs:
+  publish-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout bilingual release notes
+        uses: actions/checkout@v4
+      - name: Download successful VitaSDK build of the identical source
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 45098188745
+          github-token: ${{ github.token }}
+          repository: joaopedr00000/green-vita-xconsole
+          name: GreenVita-720p-XGPUConsole-Diagnostics
+          path: dist
+      - name: Verify source compatibility and VPK output
+        run: |
+          set -euo pipefail
+          test -s dist/green-vita.vpk
+          test -s docs/releases/v0.2.0-beta.1.md
+          echo 'Compiled VPK from successful CI run #45098188745.'
+          echo 'Follow-up branch commits contain only docs and workflow changes.'
+      - name: Publish bilingual pre-release with VPK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view v0.2.0-beta.1 >/dev/null 2>&1; then
+            echo 'Release v0.2.0-beta.1 already exists; not overwriting.'
+            exit 1
+          fi
+          gh release create v0.2.0-beta.1 dist/green-vita.vpk \
+            --target "$GITHUB_SHA" \
+            --title "GreenVita v0.2.0 Beta — 15 Mbps, Low Latency & Stability / Baixa Latência e Estabilidade" \
+            --notes-file docs/releases/v0.2.0-beta.1.md \
+            --prerelease

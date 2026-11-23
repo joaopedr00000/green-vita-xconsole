@@ -2,7 +2,7 @@ name: GreenVita 720p diagnostics and transport
 
 on:
   push:
-    branches: [vita-720p-protocol-diagnostics, master]
+    branches: [vita-720p-protocol-diagnostics, vita-recovery-and-stream-telemetry, master]
   workflow_dispatch:
 
 permissions:

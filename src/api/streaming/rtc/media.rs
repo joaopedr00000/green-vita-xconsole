@@ -22,6 +22,9 @@ const NACK_EXPIRY: Duration = Duration::from_millis(180);
 struct VideoStats {
     dropped: u64,
     decode_errors: u64,
+    rx_payload_bytes: u64,
+    nack_requests: u64,
+    nack_packets: u64,
     last_sample_duration_us: Option<u64>,
     encoded_resolution: Option<(u32, u32)>,
 }
@@ -90,6 +93,9 @@ impl VideoReceiver {
 
     pub(crate) fn receive(&mut self, packet: Packet, keyframe_requested: &mut bool) {
         self.received_packet = true;
+        // Measure actual received payload, not requested encoder bitrate.
+        self.stats.rx_payload_bytes = self.stats.rx_payload_bytes
+            .saturating_add(packet.payload.len() as u64);
         self.record_video_sequence(packet.header.sequence_number, Instant::now());
         self.bitrate.packet_received();
         let sample_stats = self.rtp.receive(&self.decoder, packet, keyframe_requested);
@@ -203,6 +209,7 @@ impl VideoReceiver {
         if let (Some(receiver_id), Some(ssrc)) = (self.receiver_id, self.ssrc)
             && let Some(mut receiver) = peer.rtp_receiver(receiver_id)
         {
+            let report_count = nacks.len() as u64;
             let nack = rtcp::transport_feedbacks::transport_layer_nack::TransportLayerNack {
                 sender_ssrc: 0,
                 media_ssrc: ssrc,
@@ -210,6 +217,8 @@ impl VideoReceiver {
             };
             if receiver.write_rtcp(vec![Box::new(nack)]).is_ok() {
                 self.last_nack_report = Some(now);
+                self.stats.nack_requests = self.stats.nack_requests.saturating_add(1);
+                self.stats.nack_packets = self.stats.nack_packets.saturating_add(report_count);
             }
         }
     }
@@ -249,7 +258,11 @@ impl VideoReceiver {
         if now.duration_since(self.last_stats_report) < STREAM_STATS_INTERVAL {
             return None;
         }
+        let elapsed = now.duration_since(self.last_stats_report).as_secs_f64();
         self.last_stats_report = now;
+        let rx_mbps = (self.stats.rx_payload_bytes as f64) * 8.0
+            / elapsed / 1_000_000.0;
+        self.stats.rx_payload_bytes = 0;
 
         let performance = crate::streaming::video::video_performance_summary();
         let source_fps = self
@@ -264,8 +277,10 @@ impl VideoReceiver {
             .map(|(width, height)| format!("{width}x{height}"))
             .unwrap_or_else(|| "?".to_owned());
         Some(format!(
-            "enc:{encoded_resolution} srcfps:{source_fps} {performance} remb:{:.1}Mbps wait:{} drop:{} err:{}",
+            "enc:{encoded_resolution} srcfps:{source_fps} {performance} rx:{rx_mbps:.1}Mbps remb:{:.1}Mbps nack:{}/{} wait:{} drop:{} err:{}",
             self.bitrate.current_mbps(),
+            self.stats.nack_requests,
+            self.stats.nack_packets,
             u8::from(self.rtp.waiting_for_keyframe()),
             self.stats.dropped,
             self.stats.decode_errors,

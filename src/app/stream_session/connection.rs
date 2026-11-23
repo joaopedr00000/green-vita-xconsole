@@ -90,6 +90,8 @@ pub(in crate::app) async fn cleanup_active_sessions(api: &ApiClient, kind: Strea
 
 impl App {
     pub(in crate::app) fn start_stream_for_target(&mut self, target: StreamStartTarget) {
+        // A deliberate user launch resets the bounded reconnect budget.
+        self.auto_reconnect_used = false;
         crate::diagnostics::step("game_launch", "CLOUD_SESSION_REQUESTED");
         if let Some(game_id) = target.game_id.as_deref() {
             if let Some(game) = self.service.titles.iter().find(|game| game.id == game_id) {

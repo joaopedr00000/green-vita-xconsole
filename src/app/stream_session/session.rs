@@ -84,6 +84,23 @@ impl StreamingSession {
         })
     }
 
+    /// Rejoin only after a real decoded video frame. Never mistake HTTP
+    /// session creation or device spoofing for playable video.
+    pub(super) fn reconnect_target(&self) -> Option<StreamStartTarget> {
+        self.latest_video_frame?;
+        let (kind, selected) = match self.return_target {
+            StreamReturnTarget::Titles(selected) => (StreamKind::Cloud, selected),
+            StreamReturnTarget::Consoles(selected) => (StreamKind::Home, selected),
+        };
+        Some(StreamStartTarget {
+            kind,
+            target_id: self.launch_target_id.clone(),
+            game_id: self.title_id.clone(),
+            label: self.launch_label.clone(),
+            return_selected: selected,
+        })
+    }
+
     pub(crate) fn set_paused(&mut self, paused: bool) {
         self.paused = paused;
         self.hint_started_at = Instant::now();

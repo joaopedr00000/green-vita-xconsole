@@ -17,6 +17,11 @@ impl App {
         }
         if closed {
             crate::diagnostics::step("webrtc_connection", "CLOSED");
+            // A transport close after actual playback may be a brief network drop.
+            // Rejoin once only: no unbounded retries or repeated account requests.
+            if self.try_reconnect_after_live_stream().await {
+                return Ok(());
+            }
             if !self.try_original_web_after_console_error().await {
                 self.exit_stream().await;
             }
@@ -31,6 +36,39 @@ impl App {
                 .await;
         }
         Ok(())
+    }
+
+    /// Inspired by XCloud4's brief-network-drop recovery, but limited to one
+    /// retry per launch and to streams that actually decoded at least one frame.
+    /// The original GreenVita 720p codec/output pipeline is unchanged.
+    async fn try_reconnect_after_live_stream(&mut self) -> bool {
+        if self.auto_reconnect_used {
+            crate::diagnostics::step("network_rejoin", "RETRY_LIMIT_REACHED");
+            return false;
+        }
+        let Some(target) = self.state.streaming()
+            .and_then(|streaming| streaming.reconnect_target()) else {
+            return false;
+        };
+        self.auto_reconnect_used = true;
+        crate::diagnostics::step("network_rejoin", "ONE_RETRY_AFTER_DECODED_VIDEO");
+
+        let state = std::mem::replace(&mut self.state, AppState::ModeSelect { selected: 0 });
+        if let Some(streaming) = state.into_streaming() {
+            if let Err(error) = streaming.stop().await {
+                crate::diagnostics::failure("network_rejoin_cleanup", &format!("{error:#}"));
+            }
+        }
+        let api = self.service.api.clone();
+        let kind = target.kind;
+        let target_id = target.target_id.clone();
+        let job = Some(tokio::spawn(async move {
+            // Expired cloud sessions are cleaned before starting a fresh one.
+            super::connection::cleanup_active_sessions(&api, kind).await;
+            api.start_stream(kind, &target_id).await
+        }));
+        self.set_state(AppState::StartingStream { target, job });
+        true
     }
 
     async fn stop_stream_with_error(&mut self, reason_key: &'static str, error: String) {
