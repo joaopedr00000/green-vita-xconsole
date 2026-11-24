@@ -1,6 +1,10 @@
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use sdl2::audio::{AudioQueue, AudioSpecDesired};
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
+use crate::settings::{StreamProfile, active_stream_profile};
+use crate::streaming::video::metrics::METRICS;
 use std::ptr::NonNull;
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
 
@@ -96,6 +100,10 @@ pub struct AudioRenderer {
     packets_tx: SyncSender<Bytes>,
     samples_rx: Receiver<Vec<i16>>,
     started: bool,
+    prebuffer_ms: u32,
+    last_underrun: Instant,
+    last_adjustment: Instant,
+    fade_next_packet: bool,
 }
 
 impl AudioRenderer {
@@ -123,6 +131,14 @@ impl AudioRenderer {
             packets_tx,
             samples_rx,
             started: false,
+            prebuffer_ms: match active_stream_profile() {
+                StreamProfile::LowLatency => 50,
+                StreamProfile::Balanced => 60,
+                StreamProfile::Quality => 80,
+            },
+            last_underrun: Instant::now(),
+            last_adjustment: Instant::now(),
+            fade_next_packet: true,
         })
     }
 
@@ -130,7 +146,24 @@ impl AudioRenderer {
         if self.started && self.queue.size() == 0 {
             self.queue.pause();
             self.started = false;
+            // Interruption: increase headroom temporarily rather than repeatedly clearing PCM.
+            self.prebuffer_ms = (self.prebuffer_ms + 10).min(110);
+            self.last_underrun = Instant::now();
+            self.last_adjustment = Instant::now();
+            METRICS.audio_underruns.fetch_add(1, Ordering::Relaxed);
+            self.fade_next_packet = true;
         }
+        if self.last_underrun.elapsed() >= Duration::from_secs(30)
+            && self.last_adjustment.elapsed() >= Duration::from_secs(30) {
+            let baseline = match active_stream_profile() {
+                StreamProfile::LowLatency => 50,
+                StreamProfile::Balanced => 60,
+                StreamProfile::Quality => 80,
+            };
+            self.prebuffer_ms = self.prebuffer_ms.saturating_sub(5).max(baseline);
+            self.last_adjustment = Instant::now();
+        }
+        METRICS.audio_target_ms.store(self.prebuffer_ms as u64, Ordering::Relaxed);
 
         for packet in packets {
             match self.packets_tx.try_send(packet) {
@@ -145,17 +178,28 @@ impl AudioRenderer {
 
         loop {
             match self.samples_rx.try_recv() {
-                Ok(samples) => {
+                Ok(mut samples) => {
                     let sample_bytes = (samples.len() * size_of::<i16>()) as u32;
                     if self.queue.size().saturating_add(sample_bytes) > MAX_QUEUED_AUDIO_BYTES {
-                        self.queue.pause();
-                        self.queue.clear();
-                        self.started = false;
+                        // Discard this *new* PCM packet, never abruptly clear already queued
+                        // samples. The buffer drains naturally toward the live stream.
+                        METRICS.audio_drops.fetch_add(1, Ordering::Relaxed);
+                        self.fade_next_packet = true;
+                        continue;
+                    }
+                    if self.fade_next_packet {
+                        // Fade in the next playable packet to hide the edge of a dropped one.
+                        let fade_samples = (AUDIO_SAMPLE_RATE as usize / 200) * AUDIO_CHANNELS;
+                        for (index, sample) in samples.iter_mut().take(fade_samples).enumerate() {
+                            let gain = index as f32 / fade_samples as f32;
+                            *sample = (*sample as f32 * gain) as i16;
+                        }
+                        self.fade_next_packet = false;
                     }
                     if let Err(error) = self.queue.queue_audio(&samples) {
                         eprintln!("Failed to queue SDL audio: {error}");
                     }
-                    if !self.started && self.queue.size() >= AUDIO_START_BUFFER_BYTES {
+                    if !self.started && self.queue.size() >= AUDIO_BYTES_PER_SECOND * self.prebuffer_ms / 1_000 {
                         self.queue.resume();
                         self.started = true;
                     }
@@ -174,6 +218,7 @@ impl AudioRenderer {
         self.queue.pause();
         self.queue.clear();
         self.started = false;
+        self.fade_next_packet = true;
         match spawn_decode_worker() {
             Ok((packets_tx, samples_rx)) => {
                 self.packets_tx = packets_tx;
