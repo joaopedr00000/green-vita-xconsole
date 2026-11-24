@@ -58,3 +58,14 @@ Test both stable 720p30 and 720p60 titles, if a title/server offers them. This c
 - OpenNOW Vita streaming profile/CPU pinning: https://github.com/OpenCloudGaming/OpenNOW-vita/releases
 
 Implementation and tests on separate development branch until hardware acceptance criteria pass; no change to `master`.
+
+## v0.3.0 Beta: adaptive streaming
+- Three persisted profiles, default **Quality** preserving 15 Mbps requested REMB cap, Balanced 10 Mbps, Low Latency 6 Mbps.
+- RTP interarrival jitter and sequence gap/late counters. Per-profile H.264 reorder grace automatically stays within 16–48 ms; no 0 ms reorder or invalid predictive frame skipping.
+- Audio adaptive start threshold (50/60/80 ms), +10 ms on underrun capped 110 ms, -5 ms after 30 clean seconds, fade-in after dropped new PCM on overflow (no old-PCM queue clear for overrun).
+- Local telemetry **displayq** (decoder output -> return of SDL present) and **pipe** (compressed AU queue -> return of SDL present), distinct from whole button-to-photon delay.
+- In-process safe bandwidth warm-start based on healthy received RTP video payload. RTP `rx` and requested REMB are never confused.
+- Option to manually restart the current game in the pause menu.
+- Authorized region picker only exposes the signed-in service's HTTPS endpoints; optional token-free HEAD connection timing isn't game RTT.
+- Read-only GitHub release notice; no auto-install. No Wi-Fi Turbo plugin integration or TCP control port.
+- Hardware regression tests remain mandatory before claiming latency or image-quality gains.
