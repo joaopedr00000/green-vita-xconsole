@@ -25,7 +25,7 @@ settings-stream-debug-info = Afficher les infos de débogage du streaming
 action-back = Retour
 
 mode-select-cloud-subtitle = Jeux via Xbox Cloud Gaming
-mode-select-home-subtitle = Pas encore implémenté — utilisez xVita pour le moment
+mode-select-home-subtitle = Diffusez depuis votre Xbox vers la PS Vita
 
 paused-resume = Retour au jeu
 paused-xbox-button = Bouton Xbox
