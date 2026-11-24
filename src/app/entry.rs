@@ -152,11 +152,42 @@ impl App {
                 auth,
             })) => {
                 self.service.api.config.home = credentials.home;
-                self.service.api.config.cloud = credentials.cloud;
+                let mut cloud = credentials.cloud;
+                if let Some(preferred) = self.settings.preferred_cloud_region.as_deref() {
+                    if cloud.regions.iter().any(|region| region.host == preferred) {
+                        cloud.host = preferred.to_owned();
+                    } else {
+                        // An obsolete preference must never redirect tokens to an unknown host.
+                        self.settings.preferred_cloud_region = None;
+                        self.settings.save();
+                    }
+                }
+                let regions = cloud.regions.clone();
+                self.service.api.config.cloud = cloud;
                 self.service.api.config.cloud_f2p = credentials.cloud_f2p;
                 self.service.api.config.console_cloud = credentials.console_cloud;
                 self.service.auth = auth;
                 self.service.refresh_xcloud_catalog_backend();
+                // HTTPS handshake RTT is a rough region-selection hint, not xCloud
+                // end-to-end streaming latency. Never send a bearer token in the probe.
+                let ping_slot = std::sync::Arc::clone(&self.region_ping_ms);
+                tokio::spawn(async move {
+                    let client = match reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(2))
+                        .build() {
+                        Ok(client) => client,
+                        Err(_) => return,
+                    };
+                    for region in regions.iter().take(12) {
+                        let start = std::time::Instant::now();
+                        if client.head(&region.host).send().await.is_ok() {
+                            let ms = start.elapsed().as_millis().min(10_000) as u64;
+                            if let Ok(mut ping) = ping_slot.lock() {
+                                ping.insert(region.host.clone(), ms);
+                            }
+                        }
+                    }
+                });
                 if let Some(profile) = profile {
                     self.service.gamertag = profile.gamertag;
                     self.service.gamerscore = profile.gamerscore;
