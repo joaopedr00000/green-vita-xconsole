@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicU8, Ordering};
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum StreamProfile {
     LowLatency,
-    #[default]
     Balanced,
+    #[default]
     Quality,
 }
 impl StreamProfile {
@@ -31,7 +31,7 @@ impl StreamProfile {
         }
     }
 }
-static ACTIVE_STREAM_PROFILE: AtomicU8 = AtomicU8::new(1);
+static ACTIVE_STREAM_PROFILE: AtomicU8 = AtomicU8::new(2);
 pub(crate) fn set_active_stream_profile(profile: StreamProfile) {
     ACTIVE_STREAM_PROFILE.store(match profile {
         StreamProfile::LowLatency => 0,
@@ -177,7 +177,7 @@ impl Default for Settings {
         Self {
             locale: Locale::default(),
             show_stream_debug_info: false,
-            stream_profile: StreamProfile::Balanced,
+            stream_profile: StreamProfile::Quality,
             preferred_cloud_region: None,
             game_profiles: HashMap::new(),
         }
