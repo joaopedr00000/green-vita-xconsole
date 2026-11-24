@@ -1,0 +1,113 @@
+name: Complete GreenVita v0.3.1 Final release notes
+on:
+  push:
+    branches: [vita-v0.3.1-final-publish]
+    paths: [.github/workflows/complete-v0.3.1-final-notes.yml]
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: green-vita-v031-final-notes
+  cancel-in-progress: false
+jobs:
+  update-notes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Wait for successful build and publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh run watch 45506107816 --exit-status --interval 15
+      - name: Verify release and publish comprehensive bilingual notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release view v0.3.1 --json assets --jq '.assets[].name' | grep -Fx green-vita.vpk
+          cat > /tmp/v031-notes.md <<'EOF'
+          ## Português (Brasil)
+          
+          **GreenVita v0.3.1 Final** é a versão estável baseada no código restaurado da v0.3.0, escolhido pela qualidade observada pelo mantenedor. Nenhuma alteração de motor de transmissão das versões posteriores foi incorporada.
+          
+          ### Jogos e acesso
+          - Xbox Cloud Gaming (xCloud): catálogo de títulos disponíveis à conta, busca, detalhes e seleção de jogo.
+          - Xbox Remote Play (xHome): descoberta de consoles vinculados à mesma conta Microsoft e início de transmissão Xbox → PS Vita. Requer Remote Play habilitado no Xbox. A validação completa em console físico ainda não foi realizada pelo mantenedor.
+          - Login Microsoft/Xbox por código de dispositivo, seleção de idioma e opção de sair da conta.
+          - Seleção automática ou manual de região Cloud entre os endpoints autorizados pelo serviço. A medição HTTPS é uma indicação de conectividade, não o ping do jogo.
+          
+          ### Imagem e desempenho
+          - Recepção H.264 de até 720p, decodificação por hardware do PS Vita e apresentação RGB565 na resolução nativa de 960 × 544.
+          - Três perfis persistentes: Baixa latência (6 Mbps), Equilibrado (10 Mbps) e Qualidade (15 Mbps, padrão). Os valores são tetos de bitrate solicitado por RTCP REMB, não garantias de taxa entregue.
+          - Bitrate adaptativo, redução diante de congestionamento e aumento gradual sob condições estáveis.
+          - Estimativa de capacidade baseada no vídeo RTP recebido, em memória, para ajudar a próxima sessão.
+          - Pipeline de baixa latência, priorização de estados recentes do controle e descarte de quadros obsoletos.
+          - Reordenação RTP adaptativa de 16–48 ms, RTCP NACK limitado para retransmissão, PLI para solicitar quadros-chave e recuperação do decodificador H.264.
+          - Áudio Opus/SDL com buffer adaptativo (50/60/80 ms iniciais conforme perfil, até 110 ms após esvaziamento), ajuste gradual e fade-in de recuperação.
+          
+          ### Controles, interface e recuperação
+          - Controles físicos do Vita, suporte a toque frontal e traseiro, opções de troca L1/L2 e R1/R2 e botões auxiliares L2/R2/L3/R3 no toque frontal.
+          - Menu rápido: retornar ao jogo, botão Xbox, reiniciar transmissão e sair do jogo.
+          - Reinício manual de sessão e reconexão automática limitada a uma tentativa após uma transmissão que já decodificou vídeo.
+          - Interface em 19 idiomas; texto Home corrigido em todos eles.
+          - Informações de fila de espera e etapas de conexão, aviso de atualização via releases públicos (sem download ou instalação automática).
+          - Orientações para Wi-Fi Turbo, projeto independente e não incluído.
+          
+          ### Diagnóstico
+          - Painel opcional com taxa RTP recebida (rx), bitrate solicitado (remb), jitter, gaps, pacotes atrasados/recuperados, NACK, descartes, erros, fila de entrada, latência local de apresentação e estado do áudio.
+          - Diagnósticos de conexão e restrições do serviço. As métricas locais não medem o input lag completo botão–tela.
+          
+          ### Instalação
+          1. Baixe **green-vita.vpk** e instale pelo VitaShell em um PS Vita desbloqueado.
+          2. Ative **Unsafe Homebrew** no HENkaku para permitir a decodificação de vídeo por hardware.
+          3. Entre na conta Xbox. Selecione Cloud ou Home; em Home, habilite previamente Remote Play no Xbox.
+          4. Em Configurações, escolha o perfil adequado. Mudanças de perfil e região valem para novas sessões.
+          
+          **Limites:** compatibilidade de jogos e bitrate dependem do serviço e da rede. A tentativa experimental de offering xgpuconsole com fallback xgpuweb/xgpuwebf2p não garante acesso a títulos exclusivos de console, incluindo GTA VI. A classificação estável descreve a versão escolhida pelo mantenedor, não uma certificação de todas as redes, jogos ou recursos em hardware.
+          
+          ---
+          
+          ## English
+          
+          **GreenVita v0.3.1 Final** is the stable release based on the restored v0.3.0 code, selected for the streaming quality observed by the maintainer. No later streaming-engine changes are included.
+          
+          ### Gaming and access
+          - Xbox Cloud Gaming (xCloud): account-available game catalog, search, details and title selection.
+          - Xbox Remote Play (xHome): discovery of consoles linked to the same Microsoft account and Xbox → PS Vita streaming session initiation. Remote Play must be enabled on the Xbox. Full physical-console validation by the maintainer remains outstanding.
+          - Microsoft/Xbox device-code sign-in, language selection and account logout.
+          - Automatic or manual cloud-region selection using service-authorized endpoints; HTTPS timing is a connectivity hint, not gameplay ping.
+          
+          ### Video and performance
+          - Up to 720p H.264 reception, PS Vita hardware decoding and RGB565 presentation at native 960 × 544 resolution.
+          - Three saved profiles: Low Latency (6 Mbps), Balanced (10 Mbps), Quality (15 Mbps, default). These are requested RTCP REMB bitrate ceilings, not guaranteed delivered rates.
+          - Adaptive bitrate, congestion reduction and gradual increases under stable conditions.
+          - In-memory received RTP bandwidth estimate to inform the next session.
+          - Low-latency pipeline, latest controller state prioritization and stale-frame dropping.
+          - Adaptive 16–48 ms RTP reordering, bounded RTCP NACK retransmission feedback, PLI keyframe requests and H.264 decoder recovery.
+          - Adaptive Opus/SDL audio buffering (50/60/80 ms starting buffers by profile, up to 110 ms after underruns), gradual adjustment and recovery fade-in.
+          
+          ### Controls, interface and recovery
+          - Vita physical controls, front and rear touch, shoulder/trigger swaps and front-touch L2/R2/L3/R3 auxiliary buttons.
+          - Quick menu: resume, Xbox button, restart stream and exit game.
+          - Manual stream restart and one bounded automatic reconnect attempt after a session has successfully decoded video.
+          - 19 UI languages, with the corrected Home subtitle in every locale.
+          - Connection stages and queue estimates, public GitHub release update notifications (no automatic download or installation).
+          - Wi-Fi Turbo guidance; the independent plugin is not bundled.
+          
+          ### Diagnostics
+          - Optional overlay with received RTP bitrate (rx), requested bitrate (remb), jitter, gaps, late/recovered packets, NACK, drops, errors, input queue, local display pipeline timing and audio-buffer health.
+          - Connection and service restriction diagnostics. Local metrics are not full button-to-photon input lag measurements.
+          
+          ### Installation
+          1. Download **green-vita.vpk** and install using VitaShell on a homebrew-enabled PS Vita.
+          2. Enable **Unsafe Homebrew** in HENkaku settings for hardware decoding.
+          3. Sign into Xbox and select Cloud or Home; for Home, enable Remote Play on the Xbox first.
+          4. Select the appropriate streaming profile in Settings. Profile and region changes apply to new sessions.
+          
+          **Limitations:** delivered bitrate and title compatibility depend on the service and network. The experimental xgpuconsole offering attempt with xgpuweb/xgpuwebf2p fallback does not guarantee access to console-only games, including GTA VI. Stable denotes the maintainer-selected release, not certification of every feature, game or network on hardware.
+          
+          ### Credits / Créditos
+          Thanks to [Day-OS](https://github.com/Day-OS/green-vita), the original GreenVita creator, Greenlight, xbox-xcloud-player, Vita Moonlight, VitaSDK/vita-rust and the PS Vita homebrew community. Independent project, not affiliated with Microsoft or Sony. MPL-2.0.
+          EOF
+          gh release edit v0.3.1 --title 'GreenVita v0.3.1 Final' --notes-file /tmp/v031-notes.md --prerelease=false --latest
