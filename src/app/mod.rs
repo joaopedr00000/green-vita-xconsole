@@ -21,6 +21,8 @@ use anyhow::Result;
 use fluent_bundle::FluentArgs;
 use std::fmt::Display;
 use std::time::Instant;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 pub(crate) struct TitleInitialOverlay {
     pub(crate) label: String,
@@ -37,6 +39,8 @@ pub struct App {
     pub(crate) title_search_requested: bool,
     /// At most one automatic stream rejoin per user-initiated launch.
     pub(crate) auto_reconnect_used: bool,
+    pub(crate) release_update: Arc<Mutex<Option<String>>>,
+    pub(crate) region_ping_ms: Arc<Mutex<HashMap<String, u64>>>, 
 }
 
 impl App {
@@ -44,7 +48,15 @@ impl App {
         let settings = Settings::load();
         crate::settings::set_active_stream_profile(settings.stream_profile);
         let service = Service::new(settings.locale.as_str());
-
+        let release_update = Arc::new(Mutex::new(None));
+        let update_slot = Arc::clone(&release_update);
+        tokio::spawn(async move {
+            if let Some(version) = crate::updates::check_for_update().await {
+                if let Ok(mut target) = update_slot.lock() {
+                    *target = Some(version);
+                }
+            }
+        });
         Ok(Self {
             service,
             state: AppState::InitializeAuthentication,
@@ -53,6 +65,8 @@ impl App {
             title_search_query: String::new(),
             title_search_requested: false,
             auto_reconnect_used: false,
+            release_update,
+            region_ping_ms: Arc::new(Mutex::new(HashMap::new())), 
             settings,
         })
     }
