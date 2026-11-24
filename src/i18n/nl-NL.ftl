@@ -25,7 +25,7 @@ settings-stream-debug-info = Streaming-foutopsporingsinfo weergeven
 action-back = Terug
 
 mode-select-cloud-subtitle = Games via Xbox Cloud Gaming
-mode-select-home-subtitle = Nog niet geïmplementeerd — gebruik voorlopig xVita
+mode-select-home-subtitle = Stream vanaf je Xbox naar PS Vita
 
 paused-resume = Terug naar het spel
 paused-xbox-button = Xbox-knop
