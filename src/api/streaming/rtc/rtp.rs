@@ -15,7 +15,7 @@ use std::time::Instant;
 const MAX_PENDING_AUDIO_PACKETS: usize = 32;
 // Allow brief cross-frame reordering while RTCP NACK asks for missing RTP.
 // Bounded to roughly two frames so Vita latency stays low.
-const VIDEO_REORDER_GRACE: std::time::Duration = std::time::Duration::from_millis(32);
+const DEFAULT_VIDEO_REORDER_GRACE: std::time::Duration = std::time::Duration::from_millis(32);
 const MAX_HELD_FUTURE_PACKETS: usize = 48;
 const MAX_H264_ACCESS_UNIT_BYTES: usize = 2 * 1024 * 1024;
 const VIDEO_RTP_CLOCK_RATE: u32 = 90_000;
@@ -81,6 +81,7 @@ pub(super) struct VideoRtp {
     stream_too_large: bool,
     waiting_for_keyframe: bool,
     held_future: Vec<Packet>,
+    reorder_grace: std::time::Duration,
 }
 
 struct PendingVideoFrame {
@@ -180,7 +181,13 @@ impl VideoRtp {
             stream_too_large: false,
             waiting_for_keyframe: false,
             held_future: Vec::new(),
+            reorder_grace: DEFAULT_VIDEO_REORDER_GRACE,
         }
+    }
+
+    /// Clamp user profile + measured jitter to avoid unsafe zero-delay H264 reordering.
+    pub(super) fn set_reorder_grace_ms(&mut self, delay_ms: u64) {
+        self.reorder_grace = std::time::Duration::from_millis(delay_ms.clamp(16, 48));
     }
 
     pub(super) fn waiting_for_keyframe(&self) -> bool {
@@ -204,7 +211,7 @@ impl VideoRtp {
         if let Some(pending) = &self.pending
             && pending.timestamp != packet.header.timestamp
             && timestamp_is_newer(packet.header.timestamp, pending.timestamp) {
-            if pending.first_packet_at.elapsed() < VIDEO_REORDER_GRACE
+            if pending.first_packet_at.elapsed() < self.reorder_grace
                 && self.held_future.len() < MAX_HELD_FUTURE_PACKETS
                 && self.held_future.first().is_none_or(|item|
                     item.header.timestamp == packet.header.timestamp)
