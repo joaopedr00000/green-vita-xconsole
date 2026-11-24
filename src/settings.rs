@@ -3,6 +3,50 @@
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU8, Ordering};
+
+/// Safe, user-selectable streaming policies. Quality requests never raise the Vita decoder
+/// above 720p; the Xbox backend may ignore RTCP REMB feedback.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum StreamProfile {
+    LowLatency,
+    #[default]
+    Balanced,
+    Quality,
+}
+impl StreamProfile {
+    pub const ALL: [Self; 3] = [Self::LowLatency, Self::Balanced, Self::Quality];
+    pub const fn bitrate_cap(self) -> u32 {
+        match self {
+            Self::LowLatency => 6_000_000,
+            Self::Balanced => 10_000_000,
+            Self::Quality => 15_000_000,
+        }
+    }
+    pub const fn starting_bitrate(self) -> u32 {
+        match self {
+            Self::LowLatency => 3_500_000,
+            Self::Balanced => 6_000_000,
+            Self::Quality => 6_000_000,
+        }
+    }
+}
+static ACTIVE_STREAM_PROFILE: AtomicU8 = AtomicU8::new(1);
+pub(crate) fn set_active_stream_profile(profile: StreamProfile) {
+    ACTIVE_STREAM_PROFILE.store(match profile {
+        StreamProfile::LowLatency => 0,
+        StreamProfile::Balanced => 1,
+        StreamProfile::Quality => 2,
+    }, Ordering::Relaxed);
+}
+pub(crate) fn active_stream_profile() -> StreamProfile {
+    match ACTIVE_STREAM_PROFILE.load(Ordering::Relaxed) {
+        0 => StreamProfile::LowLatency,
+        2 => StreamProfile::Quality,
+        _ => StreamProfile::Balanced,
+    }
+}
+
 
 const SETTINGS_DIR: &str = "ux0:data/xcloud-rust";
 const SETTINGS_PATH: &str = "ux0:data/xcloud-rust/settings.json";
@@ -101,6 +145,7 @@ pub struct Settings {
     pub locale: Locale,
     /// Shows internal stream/session state on the `Streaming` screen. Off by default.
     pub show_stream_debug_info: bool,
+    pub stream_profile: StreamProfile,
     pub game_profiles: HashMap<String, GameProfile>,
 }
 
@@ -130,6 +175,7 @@ impl Default for Settings {
         Self {
             locale: Locale::default(),
             show_stream_debug_info: false,
+            stream_profile: StreamProfile::Balanced,
             game_profiles: HashMap::new(),
         }
     }
