@@ -28,6 +28,19 @@ pub struct EndpointCredentials {
     pub default_host: String,
     pub regions: Vec<RegionEndpoint>,
 }
+impl EndpointCredentials {
+    pub fn unavailable() -> Self {
+        Self {
+            host: String::new(),
+            token: String::new(),
+            default_host: String::new(),
+            regions: Vec::new(),
+        }
+    }
+    pub fn is_available(&self) -> bool {
+        self.host.starts_with("https://") && !self.token.is_empty()
+    }
+}
 /// Only server-advertised HTTPS region hosts are selectable. Never accept
 /// arbitrary user-supplied endpoints for requests carrying cloud tokens.
 #[derive(Debug, Clone)]
@@ -531,7 +544,19 @@ impl MsalAuth {
             .await?
             .token;
 
-        let home = self.streaming_token(&gssv_token, "xhome").await?;
+        // A cloud-only region error must never prevent users with access to
+        // their own Xbox from using the separate xHome Remote Play offering.
+        // Conversely, an unavailable xHome offering must not break xCloud.
+        let home = match self.streaming_token(&gssv_token, "xhome").await {
+            Ok(home) => {
+                crate::diagnostics::step("xhome_token", "AVAILABLE");
+                home
+            }
+            Err(_error) => {
+                crate::diagnostics::step("xhome_token", "UNAVAILABLE");
+                EndpointCredentials::unavailable()
+            }
+        };
 
         crate::diagnostics::step("authentication", "XSTS_OK");
         crate::diagnostics::step("xgpuconsole_token", "ATTEMPTING");
@@ -556,10 +581,19 @@ impl MsalAuth {
         let (cloud, cloud_f2p) = match (primary, f2p) {
             (Ok(cloud), f2p) => (cloud, f2p.ok()),
             (Err(_), Ok(f2p)) => (f2p, None),
-            (Err(error), Err(_)) => return Err(error),
+            (Err(error), Err(_)) => {
+                if home.is_available() {
+                    crate::diagnostics::step("xgpuweb_token", "UNAVAILABLE_XHOME_STILL_USABLE");
+                    (EndpointCredentials::unavailable(), None)
+                } else {
+                    return Err(error);
+                }
+            },
         };
 
-        crate::diagnostics::step("xgpuweb_token", "AVAILABLE");
+        if cloud.is_available() {
+            crate::diagnostics::step("xgpuweb_token", "AVAILABLE");
+        }
         Ok(StreamingCredentials {
             home,
             cloud,
