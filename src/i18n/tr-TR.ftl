@@ -25,7 +25,7 @@ settings-stream-debug-info = Akış hata ayıklama bilgilerini göster
 action-back = Geri
 
 mode-select-cloud-subtitle = Xbox Cloud Gaming ile oyun oyna
-mode-select-home-subtitle = Henüz uygulanmadı — şimdilik xVita kullanın
+mode-select-home-subtitle = Xbox konsolundan PS Vita'ya yayın yap
 
 paused-resume = Oyuna dön
 paused-xbox-button = Xbox düğmesi

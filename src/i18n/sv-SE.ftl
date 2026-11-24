@@ -25,7 +25,7 @@ settings-stream-debug-info = Visa felsökningsinfo för strömning
 action-back = Tillbaka
 
 mode-select-cloud-subtitle = Spel via Xbox Cloud Gaming
-mode-select-home-subtitle = Inte implementerat ännu — använd xVita så länge
+mode-select-home-subtitle = Strömma från din Xbox till PS Vita
 
 paused-resume = Tillbaka till spelet
 paused-xbox-button = Xbox-knapp

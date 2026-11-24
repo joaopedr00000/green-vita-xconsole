@@ -25,7 +25,7 @@ settings-stream-debug-info = 显示串流调试信息
 action-back = 返回
 
 mode-select-cloud-subtitle = 通过 Xbox Cloud Gaming 畅玩
-mode-select-home-subtitle = 尚未实现 — 暂时请使用 xVita
+mode-select-home-subtitle = 从 Xbox 串流到 PS Vita
 
 paused-resume = 返回游戏
 paused-xbox-button = Xbox 按钮
