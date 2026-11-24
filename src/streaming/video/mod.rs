@@ -134,6 +134,9 @@ impl DirectVideoTargetGuard<'_> {
 pub struct DecodedFrame {
     pub texture_index: usize,
     pub generation: u64,
+    /// GPU frame age is measured on the Vita at presentation, not guessed from RTT.
+    pub decoded_at: std::time::Instant,
+    pub enqueued_at: std::time::Instant,
 }
 
 #[derive(Clone, Copy)]
