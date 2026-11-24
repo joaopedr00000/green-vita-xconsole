@@ -240,6 +240,8 @@ fn decode_queued_access_unit(
                 Ok(DecodedFrame {
                     texture_index,
                     generation,
+                    decoded_at: Instant::now(),
+                    enqueued_at: access_unit.queued_at,
                 }),
             );
         }
