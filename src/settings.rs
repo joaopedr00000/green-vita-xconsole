@@ -148,6 +148,10 @@ pub struct Settings {
     pub stream_profile: StreamProfile,
     /// Only a host returned in the signed-in account's regional allowlist is accepted.
     pub preferred_cloud_region: Option<String>,
+    /// Optional private LAN IPv4 of the Xbox, for same-network Remote Play.
+    pub home_console_lan_ip: Option<String>,
+    /// xHome does not have a cloud title ID; keep its shoulder remapping global.
+    pub swap_home_shoulders_and_triggers: bool,
     pub game_profiles: HashMap<String, GameProfile>,
 }
 
@@ -179,6 +183,8 @@ impl Default for Settings {
             show_stream_debug_info: false,
             stream_profile: StreamProfile::Quality,
             preferred_cloud_region: None,
+            home_console_lan_ip: None,
+            swap_home_shoulders_and_triggers: false,
             game_profiles: HashMap::new(),
         }
     }
