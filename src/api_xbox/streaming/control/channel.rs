@@ -135,6 +135,9 @@ pub fn generate_message(path: &str, data: Value) -> Value {
 pub fn startup_messages() -> Vec<Value> {
     let width = STREAM_WIDTH;
     let height = STREAM_HEIGHT;
+    // Capabilities must match the selected 6/10/15 Mbps REMB policy. The
+    // original hard-coded 2 Mbps advertised a contradiction to the server.
+    let max_bitrate_kbps = crate::settings::active_stream_profile().bitrate_cap() / 1000;
 
     vec![
         generate_message(
@@ -162,16 +165,16 @@ pub fn startup_messages() -> Vec<Value> {
                 "supportsCustomResolution": true,
                 "supportsHevc": false,
                 "supportsHdr": false,
-                "supportsFps": 30,
+                "supportsFps": 60,
                 "maxWidth": width,
                 "maxHeight": height,
-                "maxBitrateKbps": 2000,
+                "maxBitrateKbps": max_bitrate_kbps,
                 "video": {
                     "width": width,
                     "height": height,
                     "maxWidth": width,
                     "maxHeight": height,
-                    "maxBitrateKbps": 2000,
+                    "maxBitrateKbps": max_bitrate_kbps,
                 },
             }),
         ),
@@ -190,4 +193,26 @@ pub fn startup_messages() -> Vec<Value> {
             }),
         ),
     ]
+}
+
+#[cfg(test)]
+mod streaming_capabilities_tests {
+    use super::*;
+    #[test]
+    fn capabilities_advertise_native_720p_and_no_hardcoded_2mbps() {
+        let capabilities = startup_messages().into_iter()
+            .find(|message| message.get("target").and_then(Value::as_str)
+                == Some("/streaming/characteristics/clientdevicecapabilities"))
+            .expect("capabilities message");
+        let body: Value = serde_json::from_str(
+            capabilities.get("content").and_then(Value::as_str).unwrap()
+        ).expect("JSON capabilities");
+        let cap = body.get("maxBitrateKbps").and_then(Value::as_u64).unwrap();
+        assert!([6000, 10000, 15000].contains(&cap));
+        assert_eq!(body.get("video").unwrap().get("maxBitrateKbps").and_then(Value::as_u64),
+            Some(cap));
+        assert_eq!(body.get("supportsFps").and_then(Value::as_u64), Some(60));
+        assert_eq!(body.get("maxWidth").and_then(Value::as_u64), Some(1280));
+        assert_eq!(body.get("maxHeight").and_then(Value::as_u64), Some(720));
+    }
 }
