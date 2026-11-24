@@ -1,3 +1,5 @@
+> **Latest experimental beta:** [GreenVita v0.4.1 Beta](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.4.1-beta.1) — GSSV regional host recovery for Xbox Cloud Gaming HTTP 400. [Notes (PT/EN)](docs/releases/v0.4.1-beta.1.md). Xbox Remote Play/WebRTC failures are a separate issue and require device diagnostics.
+
 <p align="center">
   <img src="assets/greenvita.svg" alt="GreenVita" width="220">
 </p>
