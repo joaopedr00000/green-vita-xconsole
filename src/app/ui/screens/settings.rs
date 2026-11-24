@@ -5,7 +5,7 @@ use crate::app::ui::theme::Theme;
 use crate::app::ui::widgets::smooth_scroll_area;
 use crate::i18n::{I18n, arg_string};
 use crate::{App, AppCommand, AppState, Locale};
-use crate::settings::StreamProfile;
+use crate::settings::{StreamProfile, H264Profile, DamagePolicy, StreamDebugMode};
 use anyhow::Result;
 use fluent_bundle::FluentArgs;
 
@@ -17,6 +17,11 @@ pub enum Command {
     SetRearTouchEnabled { title_id: String, enabled: bool },
     SetFrontTouchAuxiliaryButtons { title_id: String, enabled: bool },
     SetShowStreamDebugInfo(bool),
+    SetStreamDebugMode(StreamDebugMode),
+    SetH264Profile(H264Profile),
+    SetDamagePolicy(DamagePolicy),
+    SetPeriodicKeyframe(bool),
+    SetLatencyTestMode(bool),
     SetStreamProfile(StreamProfile),
     SetCloudRegion(Option<String>),
     EditHomeLanIp,
@@ -30,7 +35,11 @@ enum SettingsRow {
     GameSwap { title_id: String, enabled: bool },
     GameRearTouch { title_id: String, enabled: bool },
     GameFrontTouchAuxiliary { title_id: String, enabled: bool },
-    StreamDebug(bool),
+    StreamDebug(StreamDebugMode),
+    H264Profile(H264Profile),
+    DamagePolicy(DamagePolicy),
+    PeriodicKeyframe(bool),
+    LatencyTest(bool),
     StreamingProfile(StreamProfile),
     CloudRegion,
     HomeLanIp,
@@ -83,9 +92,11 @@ fn settings_rows(app: &App) -> Vec<SettingsRow> {
         rows.push(SettingsRow::CloudRegion);
     }
     rows.push(SettingsRow::StreamingProfile(app.settings.stream_profile));
-    rows.push(SettingsRow::StreamDebug(
-        app.settings.show_stream_debug_info,
-    ));
+    rows.push(SettingsRow::H264Profile(app.settings.video_h264_profile));
+    rows.push(SettingsRow::DamagePolicy(app.settings.damage_policy));
+    rows.push(SettingsRow::PeriodicKeyframe(app.settings.periodic_keyframe));
+    rows.push(SettingsRow::LatencyTest(app.settings.latency_test_mode));
+    rows.push(SettingsRow::StreamDebug(app.settings.stream_debug_mode));
     rows.push(SettingsRow::Back);
     rows
 }
@@ -299,16 +310,58 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
                 }
                 row_index += 1;
                 ui.add_space(6.0);
-                if checkbox_row(
-                    ui,
-                    selected_index == row_index,
-                    app.settings.show_stream_debug_info,
-                    i18n.text("settings-stream-debug-info"),
-                ) {
-                    commands.push(
-                        Command::SetShowStreamDebugInfo(!app.settings.show_stream_debug_info)
-                            .into(),
-                    );
+                let h264_label = match app.settings.video_h264_profile {
+                    H264Profile::Baseline => i18n.text("settings-h264-baseline"),
+                    H264Profile::Main => i18n.text("settings-h264-main"),
+                };
+                if focus_row(ui, selected_index == row_index,
+                    format!("{}: {} >", i18n.text("settings-h264-profile"), h264_label)) {
+                    let next = if app.settings.video_h264_profile == H264Profile::Baseline {
+                        H264Profile::Main
+                    } else {
+                        H264Profile::Baseline
+                    };
+                    commands.push(Command::SetH264Profile(next).into());
+                }
+                row_index += 1;
+                let damage_label = match app.settings.damage_policy {
+                    DamagePolicy::LowLatency => i18n.text("settings-damage-low"),
+                    DamagePolicy::Balanced => i18n.text("settings-damage-balanced"),
+                    DamagePolicy::Quality => i18n.text("settings-damage-quality"),
+                };
+                if focus_row(ui, selected_index == row_index,
+                    format!("{}: {} >", i18n.text("settings-damage-policy"), damage_label)) {
+                    let next = match app.settings.damage_policy {
+                        DamagePolicy::LowLatency => DamagePolicy::Balanced,
+                        DamagePolicy::Balanced => DamagePolicy::Quality,
+                        DamagePolicy::Quality => DamagePolicy::LowLatency,
+                    };
+                    commands.push(Command::SetDamagePolicy(next).into());
+                }
+                row_index += 1;
+                if checkbox_row(ui, selected_index == row_index,
+                    app.settings.periodic_keyframe, i18n.text("settings-periodic-keyframe")) {
+                    commands.push(Command::SetPeriodicKeyframe(!app.settings.periodic_keyframe).into());
+                }
+                row_index += 1;
+                if checkbox_row(ui, selected_index == row_index,
+                    app.settings.latency_test_mode, i18n.text("settings-latency-test")) {
+                    commands.push(Command::SetLatencyTestMode(!app.settings.latency_test_mode).into());
+                }
+                row_index += 1;
+                let debug_label = match app.settings.stream_debug_mode {
+                    StreamDebugMode::Off => i18n.text("settings-debug-off"),
+                    StreamDebugMode::Minimal => i18n.text("settings-debug-mini"),
+                    StreamDebugMode::Full => i18n.text("settings-debug-full"),
+                };
+                if focus_row(ui, selected_index == row_index,
+                    format!("{}: {} >", i18n.text("settings-stream-debug-info"), debug_label)) {
+                    let next = match app.settings.stream_debug_mode {
+                        StreamDebugMode::Off => StreamDebugMode::Minimal,
+                        StreamDebugMode::Minimal => StreamDebugMode::Full,
+                        StreamDebugMode::Full => StreamDebugMode::Off,
+                    };
+                    commands.push(Command::SetStreamDebugMode(next).into());
                 }
                 row_index += 1;
 
@@ -504,8 +557,32 @@ impl App {
                 };
                 return self.handle_settings_command(Command::SetStreamProfile(next));
             }
-            SettingsRow::StreamDebug(enabled) => {
-                return self.handle_settings_command(Command::SetShowStreamDebugInfo(!enabled));
+            SettingsRow::H264Profile(profile) => {
+                let next = if *profile == H264Profile::Baseline { H264Profile::Main }
+                    else { H264Profile::Baseline };
+                return self.handle_settings_command(Command::SetH264Profile(next));
+            }
+            SettingsRow::DamagePolicy(policy) => {
+                let next = match policy {
+                    DamagePolicy::LowLatency => DamagePolicy::Balanced,
+                    DamagePolicy::Balanced => DamagePolicy::Quality,
+                    DamagePolicy::Quality => DamagePolicy::LowLatency,
+                };
+                return self.handle_settings_command(Command::SetDamagePolicy(next));
+            }
+            SettingsRow::PeriodicKeyframe(enabled) => {
+                return self.handle_settings_command(Command::SetPeriodicKeyframe(!enabled));
+            }
+            SettingsRow::LatencyTest(enabled) => {
+                return self.handle_settings_command(Command::SetLatencyTestMode(!enabled));
+            }
+            SettingsRow::StreamDebug(mode) => {
+                let next = match mode {
+                    StreamDebugMode::Off => StreamDebugMode::Minimal,
+                    StreamDebugMode::Minimal => StreamDebugMode::Full,
+                    StreamDebugMode::Full => StreamDebugMode::Off,
+                };
+                return self.handle_settings_command(Command::SetStreamDebugMode(next));
             }
             SettingsRow::Back => {}
         }
@@ -597,6 +674,29 @@ impl App {
                     self.service.refresh_xcloud_catalog_backend();
                 }
             }
+            Command::SetH264Profile(profile) => {
+                self.settings.video_h264_profile = profile;
+                crate::settings::set_active_video_options(&self.settings);
+                self.settings.save();
+            }
+            Command::SetDamagePolicy(policy) => {
+                self.settings.damage_policy = policy;
+                self.settings.save();
+            }
+            Command::SetPeriodicKeyframe(enabled) => {
+                self.settings.periodic_keyframe = enabled;
+                crate::settings::set_active_video_options(&self.settings);
+                self.settings.save();
+            }
+            Command::SetLatencyTestMode(enabled) => {
+                self.settings.latency_test_mode = enabled;
+                self.settings.save();
+            }
+            Command::SetStreamDebugMode(mode) => {
+                self.settings.stream_debug_mode = mode;
+                self.settings.show_stream_debug_info = false;
+                self.settings.save();
+            }
             Command::SetStreamProfile(profile) => {
                 self.settings.stream_profile = profile;
                 crate::settings::set_active_stream_profile(profile);
@@ -604,6 +704,11 @@ impl App {
             }
             Command::SetShowStreamDebugInfo(enabled) => {
                 self.settings.show_stream_debug_info = enabled;
+                self.settings.stream_debug_mode = if enabled {
+                    StreamDebugMode::Full
+                } else {
+                    StreamDebugMode::Off
+                };
                 self.settings.save();
             }
         }
