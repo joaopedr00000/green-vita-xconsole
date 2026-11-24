@@ -330,5 +330,8 @@ fn send_stream_gamepad_state(
 
     // Back is relayed separately after the hold gesture resolves.
     frame.view = f32::from(relay_back_as_view);
+    if settings.latency_test_mode {
+        crate::input::detect_and_note_button_press(&frame);
+    }
     streaming.send_gamepad_frame(frame, settings);
 }

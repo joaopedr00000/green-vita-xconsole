@@ -463,3 +463,25 @@ fn map_touch_to_stream_pos(
         (local_y / video_rect.height() as f32 * stream_height as f32).round() as u32,
     ))
 }
+
+
+// Local latency-camera test: observe new digital button edges without
+// touching the GamepadFrame sent to Xbox. The overlay only measures the Vita
+// response to input, not Xbox round-trip latency.
+static PREVIOUS_LATENCY_BUTTONS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) fn detect_and_note_button_press(frame: &GamepadFrame) {
+    use std::sync::atomic::Ordering;
+    let bits = [
+        frame.a, frame.b, frame.x, frame.y, frame.menu, frame.view, frame.nexus,
+        frame.dpad_up, frame.dpad_down, frame.dpad_left, frame.dpad_right,
+        frame.left_shoulder, frame.right_shoulder,
+        frame.left_thumb, frame.right_thumb, frame.left_trigger, frame.right_trigger,
+    ];
+    let mut mask = 0u64;
+    for (index, value) in bits.into_iter().enumerate() {
+        if value > 0.5 { mask |= 1u64 << index; }
+    }
+    let previous = PREVIOUS_LATENCY_BUTTONS.swap(mask, Ordering::Relaxed);
+    if (mask & !previous) != 0 { crate::latency_test::note_button_press(); }
+}
