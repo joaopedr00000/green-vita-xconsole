@@ -55,14 +55,22 @@ pub async fn run(mut app: App) -> Result<()> {
     let mut held_direction_since = Instant::now();
     let mut last_direction_repeat_at = Instant::now();
     let mut vita_ime_active = false;
+    let mut vita_ime_home_ip = false;
     let mut vita_ime_pending = None;
 
     loop {
         let loop_started_at = Instant::now();
         let mut egui_events = Vec::new();
         let mut direct_commands = Vec::new();
-        if app.title_search_requested && !vita_ime_active {
+        if app.home_ip_edit_requested && !vita_ime_active {
+            app.home_ip_edit_requested = false;
+            vita_ime_home_ip = true;
+            vita_ime_pending = None;
+            video.text_input().start();
+            vita_ime_active = true;
+        } else if app.title_search_requested && !vita_ime_active {
             app.title_search_requested = false;
+            vita_ime_home_ip = false;
             vita_ime_pending = None;
             video.text_input().start();
             vita_ime_active = true;
@@ -79,7 +87,11 @@ pub async fn run(mut app: App) -> Result<()> {
                         ..
                     } => {
                         if let Some(text) = vita_ime_pending.take() {
-                            app.set_title_search_query(text);
+                            if vita_ime_home_ip {
+                                app.set_home_lan_ip_from_keyboard(text);
+                            } else {
+                                app.set_title_search_query(text);
+                            }
                         }
                         video.text_input().stop();
                         vita_ime_active = false;
