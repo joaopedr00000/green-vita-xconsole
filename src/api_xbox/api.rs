@@ -110,6 +110,9 @@ impl ApiClient {
     }
 
     pub async fn get_consoles(&self) -> Result<ConsolesResponse> {
+        if !self.config.home.is_available() {
+            anyhow::bail!("Xbox Remote Play unavailable: no xHome entitlement or region access");
+        }
         self.get_json(StreamKind::Home, "/v6/servers/home").await
     }
 
@@ -178,8 +181,11 @@ impl ApiClient {
         let path = format!("/v5/sessions/{}/play", kind.as_path());
 
         if kind == StreamKind::Home {
+            if !self.config.home.is_available() {
+                anyhow::bail!("Xbox Remote Play unavailable for this account");
+            }
             return self
-                .start_stream_with_credentials(self.config.home.clone(), &path, &body, false)
+                .start_stream_with_credentials(self.config.home.clone(), &path, &body, false, true)
                 .await;
         }
 
@@ -189,7 +195,7 @@ impl ApiClient {
                 console_body["settings"]["sdkType"] = json!("console");
                 console_body["settings"]["osName"] = json!("XboxOne");
                 crate::diagnostics::step("xgpuconsole_session", "ATTEMPTING");
-                match self.start_stream_with_credentials(credentials, &path, &console_body, true).await {
+                match self.start_stream_with_credentials(credentials, &path, &console_body, true, false).await {
                     Ok(stream) => {
                         crate::diagnostics::step("xgpuconsole_session", "CREATED_NOT_VIDEO_PROOF");
                         return Ok(stream);
@@ -203,7 +209,7 @@ impl ApiClient {
         }
 
         match self
-            .start_stream_with_credentials(self.config.cloud.clone(), &path, &body, false)
+            .start_stream_with_credentials(self.config.cloud.clone(), &path, &body, false, false)
             .await
         {
             Ok(stream) => {
@@ -215,7 +221,7 @@ impl ApiClient {
                     return Err(error);
                 };
                 crate::diagnostics::step("xgpuwebf2p", "FALLBACK_REQUESTED");
-                self.start_stream_with_credentials(fallback, &path, &body, false)
+                self.start_stream_with_credentials(fallback, &path, &body, false, false)
                     .await
             }
             Err(error) => Err(error),
@@ -228,11 +234,12 @@ impl ApiClient {
         path: &str,
         body: &Value,
         is_console: bool,
+        is_home: bool,
     ) -> Result<Stream> {
         let response: StartStreamResponse = self
             .request_json(&credentials, Method::POST, path, Some(body))
             .await?;
-        Ok(Stream::new(self.clone(), credentials, response, is_console))
+        Ok(Stream::new(self.clone(), credentials, response, is_console, is_home))
     }
 
     pub async fn get_json<T>(&self, kind: StreamKind, path: &str) -> Result<T>
