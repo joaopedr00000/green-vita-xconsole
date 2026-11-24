@@ -3,7 +3,7 @@
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicBool, Ordering};
 
 /// Safe, user-selectable streaming policies. Quality requests never raise the Vita decoder
 /// above 720p; the Xbox backend may ignore RTCP REMB feedback.
@@ -32,6 +32,23 @@ impl StreamProfile {
     }
 }
 static ACTIVE_STREAM_PROFILE: AtomicU8 = AtomicU8::new(2);
+static ACTIVE_H264_PROFILE: AtomicU8 = AtomicU8::new(0);
+static ACTIVE_PERIODIC_KEYFRAME: AtomicBool = AtomicBool::new(false);
+pub(crate) fn set_active_video_options(settings: &Settings) {
+    ACTIVE_H264_PROFILE.store(match settings.video_h264_profile {
+        H264Profile::Baseline => 0, H264Profile::Main => 1,
+    }, Ordering::Relaxed);
+    ACTIVE_PERIODIC_KEYFRAME.store(settings.periodic_keyframe, Ordering::Relaxed);
+}
+pub(crate) fn active_h264_profile() -> H264Profile {
+    match ACTIVE_H264_PROFILE.load(Ordering::Relaxed) {
+        1 => H264Profile::Main, _ => H264Profile::Baseline,
+    }
+}
+pub(crate) fn active_periodic_keyframe() -> bool {
+    ACTIVE_PERIODIC_KEYFRAME.load(Ordering::Relaxed)
+}
+
 pub(crate) fn set_active_stream_profile(profile: StreamProfile) {
     ACTIVE_STREAM_PROFILE.store(match profile {
         StreamProfile::LowLatency => 0,
@@ -153,6 +170,14 @@ pub enum DamagePolicy {
     Quality,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StreamDebugMode {
+    #[default]
+    Off,
+    Minimal,
+    Full,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -162,6 +187,8 @@ pub struct Settings {
     pub stream_profile: StreamProfile,
     pub video_h264_profile: H264Profile,
     pub periodic_keyframe: bool,
+    pub latency_test_mode: bool,
+    pub stream_debug_mode: StreamDebugMode,
     pub damage_policy: DamagePolicy,
     /// Only a host returned in the signed-in account's regional allowlist is accepted.
     pub preferred_cloud_region: Option<String>,
@@ -201,6 +228,8 @@ impl Default for Settings {
             stream_profile: StreamProfile::Quality,
             video_h264_profile: H264Profile::Baseline,
             periodic_keyframe: false,
+            latency_test_mode: false,
+            stream_debug_mode: StreamDebugMode::Off,
             damage_policy: DamagePolicy::LowLatency,
             preferred_cloud_region: None,
             home_console_lan_ip: None,

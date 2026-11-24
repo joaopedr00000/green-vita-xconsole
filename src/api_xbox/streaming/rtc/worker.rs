@@ -113,7 +113,7 @@ pub(crate) fn spawn(stream: Stream) -> Result<RtcWorker> {
         stream,
         true,
         profile.bitrate_cap() / 1000,
-        H264Profile::Baseline,
-        false,
+        crate::settings::active_h264_profile(),
+        crate::settings::active_periodic_keyframe(),
     )
 }

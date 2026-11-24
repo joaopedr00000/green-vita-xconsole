@@ -9,6 +9,7 @@ mod diagnostics;
 mod i18n;
 mod input;
 mod jobs;
+mod latency_test;
 #[allow(dead_code)]
 mod pipeline;
 mod safe_memory;
@@ -50,6 +51,15 @@ mod fs_utils {
 
 fn main() -> anyhow::Result<()> {
     let _app_util = safe_memory::AppUtil::initialize()?;
+    // Keep UI work off the dedicated receive core. Failed affinity is nonfatal.
+    unsafe {
+        let result = vitasdk_sys::sceKernelChangeThreadCpuAffinityMask(
+            vitasdk_sys::SCE_KERNEL_THREAD_ID_SELF as _, 0b0001,
+        );
+        if result != 0 { eprintln!("UI CPU pin failed: {result}"); }
+    }
+    // Retain the Michael power guard disabled by default after documented regressions.
+    let _power = shell::power::engage();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;

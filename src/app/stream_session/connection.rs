@@ -90,6 +90,15 @@ pub(in crate::app) async fn cleanup_active_sessions(api: &ApiClient, kind: Strea
 
 impl App {
     pub(in crate::app) fn start_stream_for_target(&mut self, target: StreamStartTarget) {
+        // Apply user-selected damage handling to the real Michael AU assembler.
+        crate::api::streaming::rtc::rtp::DAMAGE_POLICY.store(
+            match self.settings.damage_policy {
+                crate::settings::DamagePolicy::LowLatency => 0,
+                crate::settings::DamagePolicy::Balanced => 1,
+                crate::settings::DamagePolicy::Quality => 2,
+            },
+            std::sync::atomic::Ordering::Relaxed,
+        );
         // A deliberate user launch resets the bounded reconnect budget.
         self.auto_reconnect_used = false;
         crate::diagnostics::step("game_launch", "CLOUD_SESSION_REQUESTED");

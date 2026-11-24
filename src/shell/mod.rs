@@ -3,6 +3,9 @@
 unsafe extern "C" {}
 
 mod egui_painter;
+pub(crate) mod netctl;
+pub(crate) mod netprobe;
+pub(crate) mod power;
 mod surface;
 
 use crate::app::ui::build_ui;
