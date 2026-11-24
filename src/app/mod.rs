@@ -48,7 +48,12 @@ pub struct App {
 
 impl App {
     pub fn new() -> Result<Self> {
-        let settings = Settings::load();
+        let mut settings = Settings::load();
+        // Migrate the previous single debug toggle without losing its user preference.
+        if settings.show_stream_debug_info &&
+            settings.stream_debug_mode == crate::settings::StreamDebugMode::Off {
+            settings.stream_debug_mode = crate::settings::StreamDebugMode::Full;
+        }
         crate::settings::set_active_stream_profile(settings.stream_profile);
         crate::settings::set_active_video_options(&settings);
         let service = Service::new(settings.locale.as_str());
