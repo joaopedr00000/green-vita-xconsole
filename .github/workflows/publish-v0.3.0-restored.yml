@@ -1,0 +1,65 @@
+name: Publish GreenVita v0.3.0 Restored
+
+on:
+  push:
+    branches: [vita-v0.3.0-restored-publish]
+    paths: [.github/workflows/publish-v0.3.0-restored.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: publish-green-vita-v030-restored
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout publishing workflow
+        uses: actions/checkout@v4
+      - name: Wait for verified VitaSDK build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run watch 45504531767 --exit-status --interval 10
+      - name: Download exact restored binary
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 45504531767
+          repository: joaopedr00000/green-vita-xconsole
+          github-token: ${{ github.token }}
+          name: GreenVita-720p-XGPUConsole-Diagnostics
+          path: dist
+      - name: Verify VPK and publish translation-only release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -s dist/green-vita.vpk
+          cat > /tmp/v030-restored-notes.md <<'EOF'
+          ## Português
+          **GreenVita v0.3.0 Beta restaurado.** O aplicativo é baseado exatamente no código da v0.3.0-beta.1 original, sem as modificações da v0.3.1/v0.4.0.
+          **Única alteração:** removido o aviso incorreto de que o streaming Xbox console → PS Vita não estava implementado. A opção Home agora diz 'Transmita do seu Xbox para o PS Vita' (com a mesma correção nos 19 idiomas).
+          Nenhum ajuste de WebRTC, login, bitrate, controle, áudio, vídeo, codec, rede ou compatibilidade foi realizado.
+          O código-fonte do release difere do original em apenas 19 linhas dos arquivos de idioma. Esta recompilação usa a mesma versão interna 0.3.0-beta.1, pois é uma correção exclusivamente visual.
+          **Créditos:** Day-OS, criador original do GreenVita, e os contribuidores da comunidade PS Vita.
+          
+          ## English
+          **Restored GreenVita v0.3.0 Beta**, built from the original v0.3.0-beta.1 code. No changes from the later v0.3.1/v0.4.0 branches were included.
+          **Only change:** replace the obsolete 'Not implemented yet — use xVita for now' Home/Remote Play subtitle with 'Stream from your Xbox console to PS Vita', localized in 19 languages.
+          No streaming, RTC, authentication, bitrate, input, audio, graphics, codec, or networking logic was modified.
+          This label-only rebuild retains internal version 0.3.0-beta.1. All original project credits and MPL-2.0 apply.
+          EOF
+          if gh release view v0.3.0-restored >/dev/null 2>&1; then
+            echo 'Already published; will not overwrite the tag or artifact'
+            exit 0
+          fi
+          gh release create v0.3.0-restored dist/green-vita.vpk \
+            --target 02f2cef3ecbb3f5dad55f91fbd229c085fe32d5a \
+            --title 'GreenVita v0.3.0 Beta — Restored (Home text only)' \
+            --notes-file /tmp/v030-restored-notes.md \
+            --prerelease
