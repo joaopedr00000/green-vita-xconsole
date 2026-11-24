@@ -135,11 +135,13 @@ impl StreamingSession {
             self.ignore_confirm_until_release = false;
         }
 
-        let swap_shoulders_and_triggers = self
-            .title_id
-            .as_deref()
-            .and_then(|title_id| settings.game_profile(title_id))
-            .is_some_and(|profile| profile.swap_shoulders_and_triggers);
+        let swap_shoulders_and_triggers = match self.title_id.as_deref() {
+            Some(title_id) => settings.game_profile(title_id)
+                .is_some_and(|profile| profile.swap_shoulders_and_triggers),
+            None if matches!(self.return_target, StreamReturnTarget::Consoles(_)) =>
+                settings.swap_home_shoulders_and_triggers,
+            None => false,
+        };
         if swap_shoulders_and_triggers {
             std::mem::swap(&mut frame.left_shoulder, &mut frame.left_trigger);
             std::mem::swap(&mut frame.right_shoulder, &mut frame.right_trigger);
