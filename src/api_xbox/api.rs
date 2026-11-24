@@ -34,10 +34,14 @@ impl Default for ApiClientConfig {
             home: EndpointCredentials {
                 host: String::new(),
                 token: String::new(),
+                default_host: String::new(),
+                regions: Vec::new(),
             },
             cloud: EndpointCredentials {
                 host: String::new(),
                 token: String::new(),
+                default_host: String::new(),
+                regions: Vec::new(),
             },
             cloud_f2p: None,
             console_cloud: None,
