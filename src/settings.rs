@@ -146,6 +146,8 @@ pub struct Settings {
     /// Shows internal stream/session state on the `Streaming` screen. Off by default.
     pub show_stream_debug_info: bool,
     pub stream_profile: StreamProfile,
+    /// Only a host returned in the signed-in account's regional allowlist is accepted.
+    pub preferred_cloud_region: Option<String>,
     pub game_profiles: HashMap<String, GameProfile>,
 }
 
@@ -176,6 +178,7 @@ impl Default for Settings {
             locale: Locale::default(),
             show_stream_debug_info: false,
             stream_profile: StreamProfile::Balanced,
+            preferred_cloud_region: None,
             game_profiles: HashMap::new(),
         }
     }
