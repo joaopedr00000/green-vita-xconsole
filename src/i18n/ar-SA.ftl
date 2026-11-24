@@ -92,3 +92,16 @@ settings-xhome-ip = عنوان Xbox المحلي IPv4
 settings-xhome-ip-hint = اختياري: عنوان خاص لـ Xbox على الشبكة نفسها. اتركه فارغًا للاتصال التلقائي.
 settings-xhome-ip-invalid = أدخل عنوان IPv4 خاصًا (مثل 192.168.1.20).
 settings-xhome-shoulder-swap = تبديل L1/L2 و R1/R2 في اللعب عن بعد
+
+settings-h264-profile = ملف H.264
+settings-h264-baseline = Baseline (موصى به)
+settings-h264-main = Main (تجريبي)
+settings-damage-policy = إطارات فيديو تالفة
+settings-damage-low = زمن وصول منخفض
+settings-damage-balanced = متوازن
+settings-damage-quality = جودة عالية
+settings-periodic-keyframe = طلب إطار رئيسي كل 200 مللي ثانية
+settings-latency-test = علامة اختبار التأخير بالكاميرا
+settings-debug-off = إيقاف
+settings-debug-mini = مختصر (الإطارات ومعدل البت)
+settings-debug-full = تشخيص كامل

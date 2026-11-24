@@ -92,3 +92,16 @@ settings-xhome-ip = Xbox LAN IPv4
 settings-xhome-ip-hint = 선택 사항: 같은 네트워크의 Xbox 사설 IP. 비우면 자동 연결.
 settings-xhome-ip-invalid = 사설 IPv4 입력 (예: 192.168.1.20)
 settings-xhome-shoulder-swap = 원격 플레이에서 L1/L2 및 R1/R2 바꾸기
+
+settings-h264-profile = H.264 프로필
+settings-h264-baseline = Baseline (권장)
+settings-h264-main = Main (실험적)
+settings-damage-policy = 손상된 영상 프레임
+settings-damage-low = 낮은 지연
+settings-damage-balanced = 균형
+settings-damage-quality = 화질 우선
+settings-periodic-keyframe = 200ms마다 키프레임 요청
+settings-latency-test = 카메라 지연 테스트 표시
+settings-debug-off = 끔
+settings-debug-mini = 간단 (FPS/비트레이트)
+settings-debug-full = 상세 진단

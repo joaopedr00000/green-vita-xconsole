@@ -92,3 +92,16 @@ settings-xhome-ip = Lokalny IPv4 Xbox
 settings-xhome-ip-hint = Opcjonalnie: prywatny IP Xbox w tej samej sieci. Puste — automatycznie.
 settings-xhome-ip-invalid = Podaj prywatny IPv4 (np. 192.168.1.20).
 settings-xhome-shoulder-swap = Zamień L1/L2 i R1/R2 w grze zdalnej
+
+settings-h264-profile = Profil H.264
+settings-h264-baseline = Baseline (zalecany)
+settings-h264-main = Main (eksperymentalny)
+settings-damage-policy = Uszkodzone klatki wideo
+settings-damage-low = Małe opóźnienie
+settings-damage-balanced = Zrównoważony
+settings-damage-quality = Jakość
+settings-periodic-keyframe = Żądaj klatki kluczowej co 200 ms
+settings-latency-test = Znacznik opóźnienia dla kamery
+settings-debug-off = Wyłączone
+settings-debug-mini = Skrócony (FPS/bitrate)
+settings-debug-full = Pełna diagnostyka

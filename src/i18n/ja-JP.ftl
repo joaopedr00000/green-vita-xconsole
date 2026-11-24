@@ -92,3 +92,16 @@ settings-xhome-ip = Xbox の LAN IPv4
 settings-xhome-ip-hint = 任意: 同じネットワークの Xbox のプライベート IP。空欄で自動接続。
 settings-xhome-ip-invalid = プライベート IPv4 を入力 (例: 192.168.1.20)
 settings-xhome-shoulder-swap = リモートプレイで L1/L2 と R1/R2 を入れ替え
+
+settings-h264-profile = H.264 プロファイル
+settings-h264-baseline = Baseline (推奨)
+settings-h264-main = Main (実験的)
+settings-damage-policy = 破損した映像フレーム
+settings-damage-low = 低遅延
+settings-damage-balanced = バランス
+settings-damage-quality = 画質優先
+settings-periodic-keyframe = 200 ms ごとにキーフレームを要求
+settings-latency-test = カメラ用遅延テストマーカー
+settings-debug-off = オフ
+settings-debug-mini = 簡易 (FPS/ビットレート)
+settings-debug-full = 詳細診断

@@ -92,3 +92,16 @@ settings-xhome-ip = Xbox yerel IPv4
 settings-xhome-ip-hint = İsteğe bağlı: aynı ağdaki özel Xbox IP. Otomatik bağlantı için boş bırakın.
 settings-xhome-ip-invalid = Özel IPv4 girin (ör. 192.168.1.20).
 settings-xhome-shoulder-swap = Uzaktan oynamada L1/L2 ve R1/R2 tuşlarını değiştir
+
+settings-h264-profile = H.264 profili
+settings-h264-baseline = Baseline (önerilen)
+settings-h264-main = Main (deneysel)
+settings-damage-policy = Bozuk video kareleri
+settings-damage-low = Düşük gecikme
+settings-damage-balanced = Dengeli
+settings-damage-quality = Kalite
+settings-periodic-keyframe = 200 ms'de bir anahtar kare iste
+settings-latency-test = Kamera gecikme testi işareti
+settings-debug-off = Kapalı
+settings-debug-mini = Kompakt (FPS/bit hızı)
+settings-debug-full = Tam tanılama

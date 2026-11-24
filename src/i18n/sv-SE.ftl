@@ -92,3 +92,16 @@ settings-xhome-ip = Xbox LAN IPv4
 settings-xhome-ip-hint = Valfritt: privat Xbox-IP på samma nätverk. Tomt för automatisk väg.
 settings-xhome-ip-invalid = Ange privat IPv4 (t.ex. 192.168.1.20).
 settings-xhome-shoulder-swap = Byt L1/L2 och R1/R2 vid fjärrspel
+
+settings-h264-profile = H.264-profil
+settings-h264-baseline = Baseline (rekommenderas)
+settings-h264-main = Main (experimentell)
+settings-damage-policy = Skadade videobilder
+settings-damage-low = Låg latens
+settings-damage-balanced = Balanserat
+settings-damage-quality = Kvalitet
+settings-periodic-keyframe = Begär nyckelbild var 200 ms
+settings-latency-test = Kameramarkör för latenstest
+settings-debug-off = Av
+settings-debug-mini = Kompakt (FPS/bitrate)
+settings-debug-full = Full diagnostik

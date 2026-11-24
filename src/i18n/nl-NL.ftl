@@ -92,3 +92,16 @@ settings-xhome-ip = Xbox LAN IPv4
 settings-xhome-ip-hint = Optioneel: privé-IP van Xbox op hetzelfde netwerk. Leeg voor automatisch.
 settings-xhome-ip-invalid = Voer een privé-IPv4 in (bijv. 192.168.1.20).
 settings-xhome-shoulder-swap = Wissel L1/L2 en R1/R2 bij Remote Play
+
+settings-h264-profile = H.264-profiel
+settings-h264-baseline = Baseline (aanbevolen)
+settings-h264-main = Main (experimenteel)
+settings-damage-policy = Beschadigde videoframes
+settings-damage-low = Lage latentie
+settings-damage-balanced = Gebalanceerd
+settings-damage-quality = Kwaliteit
+settings-periodic-keyframe = Elke 200 ms keyframe aanvragen
+settings-latency-test = Cameramarkering voor latentietest
+settings-debug-off = Uit
+settings-debug-mini = Compact (FPS/bitrate)
+settings-debug-full = Volledige diagnostiek

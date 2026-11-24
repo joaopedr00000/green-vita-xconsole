@@ -92,3 +92,16 @@ settings-xhome-ip = Xbox 區域網路 IPv4
 settings-xhome-ip-hint = 選用：同網路的 Xbox 私有 IP。留空則自動連線。
 settings-xhome-ip-invalid = 請輸入私有 IPv4（例如 192.168.1.20）
 settings-xhome-shoulder-swap = 遠端遊玩時交換 L1/L2 和 R1/R2
+
+settings-h264-profile = H.264 設定檔
+settings-h264-baseline = Baseline（建議）
+settings-h264-main = Main（實驗性）
+settings-damage-policy = 損壞的視訊畫格
+settings-damage-low = 低延遲
+settings-damage-balanced = 平衡
+settings-damage-quality = 高畫質
+settings-periodic-keyframe = 每 200 毫秒要求關鍵影格
+settings-latency-test = 相機延遲測試標記
+settings-debug-off = 關閉
+settings-debug-mini = 簡潔（FPS/位元率）
+settings-debug-full = 完整診斷
