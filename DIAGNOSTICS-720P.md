@@ -81,3 +81,12 @@ their GPL source into GreenVita's MPL-2.0 codebase.
 - `audio:Nms`, `au:N/N`: adaptive audio start target, underruns and skipped PCM due to backlog.
 - Selected Quality profile defaults to 15 Mbps requested maximum; Balanced requests at most 10 Mbps, Low Latency 6 Mbps. Changes apply on next stream.
 - Authorized region selection is for **future** sessions. HTTPS HEAD timing does not estimate cloud gaming RTT.
+
+## v0.3.1 Beta — xHome console-to-Vita
+- xHome ONLY: synthesize IPv4 candidates from RFC4380 Teredo `2001:0::/32` console ICE addresses. The original IPv4 candidate path is preserved; cloud sessions do not derive Teredo candidates.
+- Settings: optional private Xbox LAN IPv4 avoids WAN hairpin only when both machines can directly communicate. Empty field leaves the automatic Internet/Teredo route. No public-address manual overrides are accepted.
+- Distinct xHome and web-cloud token outcomes: successful login and remote-console access no longer depend on unrelated regional cloud eligibility.
+- Initial control-channel `clientdevicecapabilities`: advertises 6/10/15 Mbps per current stream profile, up to 60fps capability, and 1280×720 maximum video dimensions. The server may ignore these preferences.
+- WARNING: some newer Xbox Series Remote Play sessions send 2560×1440, which the Vita HW H.264 path cannot decode. Check `enc:` and `h264_decoder` diagnostic status; reduce the console's output resolution or test another Xbox configuration rather than raising decoder allocations.
+- Neutral pad updates when controller is missing; in xHome the shoulder swap uses the explicit global setting rather than a nonexistent cloud title profile.
+- Hardware tests: Xbox Series X|S on 2.4GHz LAN, Xbox on wired Ethernet where available, optional local IP configured, compare IPv4 Teredo vs LAN and 720p30/60. No guarantee of GTA VI or other console-only cloud offerings.
