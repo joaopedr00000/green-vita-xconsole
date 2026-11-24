@@ -25,7 +25,7 @@ settings-stream-debug-info = Mostrar informações de depuração do streaming
 action-back = Voltar
 
 mode-select-cloud-subtitle = Jogos via Xbox Cloud Gaming
-mode-select-home-subtitle = Não implementado — use o xVita por enquanto
+mode-select-home-subtitle = Transmita do seu próprio Xbox (experimental)
 
 paused-resume = Voltar ao jogo
 paused-xbox-button = Botão Xbox
@@ -90,3 +90,9 @@ update-available = Nova versão disponível: { $version }
 settings-cloud-region = Região da nuvem Xbox
 settings-cloud-region-hint = O tempo HTTPS é apenas um indicativo de conexão, não o ping do jogo. A mudança vale para novas sessões.
 settings-wifi-turbo-hint = Wi-Fi Turbo: para 720p mais estável use Wi-Fi 2,4 GHz sem interferência; compare jitter, gaps, drops e rx no diagnóstico. A porta TCP de controle do Turbo não é utilizada.
+
+settings-xhome-heading = Uso Remoto do Xbox (xHome)
+settings-xhome-ip = IPv4 local do Xbox
+settings-xhome-ip-hint = Opcional: IP privado do Xbox na mesma rede. Apague para rota automática.
+settings-xhome-ip-invalid = Digite um IPv4 privado (ex.: 192.168.1.20).
+settings-xhome-shoulder-swap = Inverter L1/L2 e R1/R2 no Uso Remoto

@@ -25,7 +25,7 @@ settings-stream-debug-info = Show streaming debug info
 action-back = Back
 
 mode-select-cloud-subtitle = Stream Xbox Cloud Gaming titles
-mode-select-home-subtitle = Not implemented yet — use xVita for now
+mode-select-home-subtitle = Stream from your own Xbox console (experimental)
 
 paused-resume = Return to game
 paused-xbox-button = Xbox button
@@ -90,3 +90,9 @@ update-available = New version available: { $version }
 settings-cloud-region = Xbox cloud region
 settings-cloud-region-hint = HTTPS timing is only a connectivity hint; it is not gameplay ping. Changes apply to new sessions.
 settings-wifi-turbo-hint = Wi-Fi Turbo: for smoother 720p use clean 2.4 GHz Wi-Fi; compare jitter, gaps, drops and rx in debug view. The Turbo TCP control port is not used.
+
+settings-xhome-heading = Xbox Remote Play (xHome)
+settings-xhome-ip = Xbox LAN IPv4
+settings-xhome-ip-hint = Optional: Xbox private IPv4 on same Wi-Fi. Clear for automatic routing.
+settings-xhome-ip-invalid = Enter a private LAN IPv4 (example: 192.168.1.20).
+settings-xhome-shoulder-swap = Swap L1/L2 and R1/R2 in Xbox Remote Play

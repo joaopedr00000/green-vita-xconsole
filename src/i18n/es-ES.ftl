@@ -25,7 +25,7 @@ settings-stream-debug-info = Mostrar información de depuración del streaming
 action-back = Atrás
 
 mode-select-cloud-subtitle = Juegos mediante Xbox Cloud Gaming
-mode-select-home-subtitle = Aún no implementado — usa xVita por ahora
+mode-select-home-subtitle = Transmite desde tu Xbox (experimental)
 
 paused-resume = Volver al juego
 paused-xbox-button = Botón Xbox
@@ -86,3 +86,9 @@ settings-profile-balanced = Equilibrado (máx. 10 Mbps)
 settings-profile-quality = Calidad (máx. 15 Mbps)
 paused-restart-stream = Reiniciar transmisión
 update-available = Nueva versión disponible: { $version }
+
+settings-xhome-heading = Uso a distancia de Xbox (xHome)
+settings-xhome-ip = IPv4 local de Xbox
+settings-xhome-ip-hint = Opcional: IP privado de Xbox en la misma red. Borra para ruta automática.
+settings-xhome-ip-invalid = Introduce un IPv4 privado (ej.: 192.168.1.20).
+settings-xhome-shoulder-swap = Intercambiar L1/L2 y R1/R2 en Uso a distancia
