@@ -11,6 +11,13 @@ const AVATAR_KEY: &str = "__avatar__";
 
 impl App {
     pub(super) fn load_credentials(&mut self) {
+        if crate::shell::netctl::blocks_sign_in(crate::shell::netctl::wifi_state()) {
+            self.set_localized_error_screen(
+                "error-sign-in-request",
+                "PS Vita Wi-Fi is disconnected. Reconnect and retry.".to_owned()
+            );
+            return;
+        }
         let mut auth = self.service.auth.clone();
         self.set_state(AppState::LoadingCredentials(tokio::spawn(async move {
             let credentials = match auth.fetch_streaming_credentials().await {
@@ -38,6 +45,13 @@ impl App {
     }
 
     pub(super) fn request_device_code(&mut self) {
+        if crate::shell::netctl::blocks_sign_in(crate::shell::netctl::wifi_state()) {
+            self.set_localized_error_screen(
+                "error-sign-in-request",
+                "PS Vita Wi-Fi is disconnected. Reconnect and retry.".to_owned()
+            );
+            return;
+        }
         let auth = self.service.auth.clone();
         self.set_state(AppState::RequestingDeviceCode(tokio::spawn(async move {
             auth.request_device_code().await
