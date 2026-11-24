@@ -1,5 +1,5 @@
 use rtc::data_channel::RTCDataChannelId;
-use rtc::peer_connection::RTCPeerConnection;
+use crate::api::streaming::rtc::peer::FeedbackPeer as RTCPeerConnection;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -20,6 +20,7 @@ pub(in crate::api_xbox::streaming) fn handle_data_channel_message(
     handshake_stage: &mut HandshakeStage,
     channel_id: RTCDataChannelId,
     data: &[u8],
+    video_fps: u32,
 ) {
     if channel_id != ids.message || *handshake_stage != HandshakeStage::WaitingForHandshakeAck {
         return;
@@ -34,9 +35,12 @@ pub(in crate::api_xbox::streaming) fn handle_data_channel_message(
     if let Some(mut control_channel) = pc.data_channel(ids.control) {
         let _ = control_channel.send_text(authorization_request().to_string());
         let _ = control_channel.send_text(gamepad_changed(0, true).to_string());
+        let _ = control_channel.send_text(
+            video_preference(STREAM_WIDTH, STREAM_HEIGHT, video_fps).to_string(),
+        );
     }
     if let Some(mut message_channel) = pc.data_channel(ids.message) {
-        for message in startup_messages() {
+        for message in startup_messages(video_fps) {
             let _ = message_channel.send_text(message.to_string());
         }
     }
@@ -106,6 +110,19 @@ pub fn gamepad_changed(gamepad_index: u8, was_added: bool) -> Value {
     })
 }
 
+/// Newer-protocol control message declaring the exact stream the client wants;
+/// reference clients send this right after authorization.
+pub fn video_preference(width: u32, height: u32, fps: u32) -> Value {
+    json!({
+        "type": "VideoPreference",
+        "width": width,
+        "height": height,
+        "fps": fps,
+        "videoCodec": "H264",
+        "colorSpaceFlags": 0,
+    })
+}
+
 pub fn video_keyframe_requested(ifr_requested: bool) -> Value {
     json!({
         "message": "videoKeyframeRequested",
@@ -132,12 +149,26 @@ pub fn generate_message(path: &str, data: Value) -> Value {
     })
 }
 
-pub fn startup_messages() -> Vec<Value> {
+pub fn dimensions_changed_message(width: u32, height: u32) -> Value {
+    generate_message(
+        "/streaming/characteristics/dimensionschanged",
+        json!({
+            "horizontal": width,
+            "vertical": height,
+            "preferredWidth": width,
+            "preferredHeight": height,
+            "safeAreaLeft": 0,
+            "safeAreaTop": 0,
+            "safeAreaRight": width,
+            "safeAreaBottom": height,
+            "supportsCustomResolution": true,
+        }),
+    )
+}
+
+pub fn startup_messages(_video_fps: u32) -> Vec<Value> {
     let width = STREAM_WIDTH;
     let height = STREAM_HEIGHT;
-    // Capabilities must match the selected 6/10/15 Mbps REMB policy. The
-    // original hard-coded 2 Mbps advertised a contradiction to the server.
-    let max_bitrate_kbps = crate::settings::active_stream_profile().bitrate_cap() / 1000;
 
     vec![
         generate_message(
@@ -160,59 +191,12 @@ pub fn startup_messages() -> Vec<Value> {
             json!({ "touchInputEnabled": false }),
         ),
         generate_message(
+            // Reference clients declare capabilities as an empty object; the full
+            // form (supportsFps/maxWidth/maxBitrateKbps...) is legacy and may push
+            // the console into conservative pacing.
             "/streaming/characteristics/clientdevicecapabilities",
-            json!({
-                "supportsCustomResolution": true,
-                "supportsHevc": false,
-                "supportsHdr": false,
-                "supportsFps": 60,
-                "maxWidth": width,
-                "maxHeight": height,
-                "maxBitrateKbps": max_bitrate_kbps,
-                "video": {
-                    "width": width,
-                    "height": height,
-                    "maxWidth": width,
-                    "maxHeight": height,
-                    "maxBitrateKbps": max_bitrate_kbps,
-                },
-            }),
+            json!({}),
         ),
-        generate_message(
-            "/streaming/characteristics/dimensionschanged",
-            json!({
-                "horizontal": width,
-                "vertical": height,
-                "preferredWidth": width,
-                "preferredHeight": height,
-                "safeAreaLeft": 0,
-                "safeAreaTop": 0,
-                "safeAreaRight": width,
-                "safeAreaBottom": height,
-                "supportsCustomResolution": true,
-            }),
-        ),
+        dimensions_changed_message(width, height),
     ]
-}
-
-#[cfg(test)]
-mod streaming_capabilities_tests {
-    use super::*;
-    #[test]
-    fn capabilities_advertise_native_720p_and_no_hardcoded_2mbps() {
-        let capabilities = startup_messages().into_iter()
-            .find(|message| message.get("target").and_then(Value::as_str)
-                == Some("/streaming/characteristics/clientdevicecapabilities"))
-            .expect("capabilities message");
-        let body: Value = serde_json::from_str(
-            capabilities.get("content").and_then(Value::as_str).unwrap()
-        ).expect("JSON capabilities");
-        let cap = body.get("maxBitrateKbps").and_then(Value::as_u64).unwrap();
-        assert!([6000, 10000, 15000].contains(&cap));
-        assert_eq!(body.get("video").unwrap().get("maxBitrateKbps").and_then(Value::as_u64),
-            Some(cap));
-        assert_eq!(body.get("supportsFps").and_then(Value::as_u64), Some(60));
-        assert_eq!(body.get("maxWidth").and_then(Value::as_u64), Some(1280));
-        assert_eq!(body.get("maxHeight").and_then(Value::as_u64), Some(720));
-    }
 }

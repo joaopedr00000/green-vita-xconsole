@@ -1,9 +1,9 @@
+use crate::api::streaming::rtc::peer::FeedbackPeer;
 use crate::api::streaming::rtc::session::{RtcSession, RtcSessionConfig};
 use crate::streaming::input::{GamepadFrame, PointerEvent};
 use crate::streaming::video::{DecodedFrame, DirectVideoOutput, HW_OUTPUT_HEIGHT, HW_OUTPUT_WIDTH};
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use rtc::peer_connection::RTCPeerConnection;
 use rtc::peer_connection::sdp::RTCSessionDescription;
 use rtc::peer_connection::state::RTCPeerConnectionState;
 use rtc::peer_connection::transport::RTCIceCandidateInit;
@@ -25,7 +25,7 @@ const SDP_NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(45);
 pub(crate) trait RtcWorkerProvider: Send + 'static {
     type Protocol: super::session::RtcSessionBackend;
 
-    fn create_peer(&self) -> Result<(RTCPeerConnection, Self::Protocol)>;
+    fn create_peer(&self) -> Result<(FeedbackPeer, Self::Protocol)>;
     fn session_config(&self) -> RtcSessionConfig;
     async fn exchange_sdp(&self, offer: &RTCSessionDescription) -> Result<String>;
 }
@@ -46,7 +46,6 @@ enum RtcWorkerCommand {
 
 struct SampledGamepadFrame {
     frame: GamepadFrame,
-    sampled_at: Instant,
 }
 
 pub struct RtcWorker {
@@ -96,13 +95,25 @@ impl RtcWorker {
                             RtcWorkerEvent::Error(format!("{error:#}")),
                         );
                     }
-                    Err(_) => {
+                    Err(panic) => {
+                        // Keep the real panic message (investigation: the
+                        // generic text hid the actual failure cause).
+                        let detail = panic
+                            .downcast_ref::<&str>()
+                            .map(|text| (*text).to_owned())
+                            .or_else(|| panic.downcast_ref::<String>().cloned())
+                            .unwrap_or_else(|| "non-string panic payload".to_owned());
                         send_important_event(
                             &events_tx,
-                            RtcWorkerEvent::Error("RTC worker thread panicked".to_owned()),
+                            RtcWorkerEvent::Error(format!(
+                                "RTC worker thread panicked: {detail}"
+                            )),
                         );
                     }
                 }
+                crate::streaming::video::metrics::flush_csv_log();
+                // Flush the RAM-buffered RTP dump log to ux0: at session end.
+                crate::streaming::video::rtp_dump_log::flush_rtp_dump();
             })
             .context("failed to spawn RTC worker thread")?;
 
@@ -126,7 +137,7 @@ impl RtcWorker {
 
     pub fn send_gamepad_frame(&self, frame: GamepadFrame) {
         if let Ok(mut latest) = self.latest_gamepad.lock() {
-            *latest = Some(SampledGamepadFrame { frame, sampled_at: Instant::now() });
+            *latest = Some(SampledGamepadFrame { frame });
         }
     }
 
@@ -143,6 +154,11 @@ impl RtcWorker {
 
 impl Drop for RtcWorker {
     fn drop(&mut self) {
+        // Flush the RAM-buffered metrics CSV log to ux0: at session end.
+        // This is the ONLY ux0: write path; no filesystem I/O during the session.
+        crate::streaming::video::metrics::flush_csv_log();
+        // Flush the RAM-buffered RTP dump log to ux0: at session end.
+        crate::streaming::video::rtp_dump_log::flush_rtp_dump();
         send_lossy(&self.commands_tx, RtcWorkerCommand::Stop);
     }
 }
@@ -260,13 +276,11 @@ async fn run_session<B: super::session::RtcSessionBackend>(
                 // is temporarily suppressed (for example, until Confirm is released).
                 let sampled = latest.unwrap_or_else(|| SampledGamepadFrame {
                     frame: GamepadFrame::default(),
-                    sampled_at: Instant::now(),
                 });
                 send_sampled_gamepad_frame(&mut session, sampled, &mut last_gamepad_sent, true);
             } else if pulse_started || latest.is_some() {
                 let mut sampled = latest.unwrap_or_else(|| SampledGamepadFrame {
                     frame: GamepadFrame::default(),
-                    sampled_at: Instant::now(),
                 });
                 // Guide/Nexus is currently the only pulsed input. Keep it asserted while normal
                 // gamepad frames continue to flow instead of immediately overwriting the press.
@@ -375,11 +389,6 @@ fn send_sampled_gamepad_frame<B: super::session::RtcSessionBackend>(
         .backend
         .send_gamepad_frame(&mut session.peer, sampled.frame.clone())
     {
-        // This is *local* input dispatch delay, not end-to-end xCloud latency.
-        crate::streaming::video::metrics::METRICS
-            .input_dispatch_us
-            .store(now.duration_since(sampled.sampled_at).as_micros() as u64,
-                std::sync::atomic::Ordering::Relaxed);
         *last_sent = Some((sampled.frame, now));
     }
 }
