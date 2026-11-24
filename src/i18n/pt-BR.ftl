@@ -86,3 +86,7 @@ settings-profile-balanced = Equilibrado (até 10 Mbps)
 settings-profile-quality = Qualidade (até 15 Mbps)
 paused-restart-stream = Reiniciar streaming
 update-available = Nova versão disponível: { $version }
+
+settings-cloud-region = Região da nuvem Xbox
+settings-cloud-region-hint = O tempo HTTPS é apenas um indicativo de conexão, não o ping do jogo. A mudança vale para novas sessões.
+settings-wifi-turbo-hint = Wi-Fi Turbo: para 720p mais estável use Wi-Fi 2,4 GHz sem interferência; compare jitter, gaps, drops e rx no diagnóstico. A porta TCP de controle do Turbo não é utilizada.
