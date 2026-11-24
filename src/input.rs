@@ -123,7 +123,21 @@ pub fn read_gamepad_frame(
     rear_touch_enabled: bool,
     front_touch_auxiliary_buttons: bool,
 ) -> Option<GamepadFrame> {
-    let controller = controller?;
+    let Some(controller) = controller else {
+        // Keep the Xbox xHome input liveness watchdog satisfied even when a
+        // controller disconnects or is absent (e.g. a PSTV without a paired pad).
+        // Preserve auxiliary touch zones, and send a neutral rather than stale frame.
+        let pressed = |button| f32::from(touch_buttons.pressed(
+            button, rear_touch_enabled, front_touch_auxiliary_buttons
+        ));
+        return Some(GamepadFrame {
+            left_thumb: pressed(RearTouchButton::L3),
+            right_thumb: pressed(RearTouchButton::R3),
+            left_trigger: pressed(RearTouchButton::L2),
+            right_trigger: pressed(RearTouchButton::R2),
+            ..GamepadFrame::default()
+        });
+    };
     let button = |b: Button| f32::from(controller.button(b));
     Some(GamepadFrame {
         gamepad_index: 0,
