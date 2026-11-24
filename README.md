@@ -27,7 +27,7 @@ You need a homebrew-enabled PS Vita with VitaShell and an Xbox account that has
 access to Xbox Cloud Gaming.
 
 1. Download `green-vita.vpk` from the
-   [adaptive streaming v0.3.0 beta release](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.3.0-beta.1).
+   [adaptive streaming v0.3.0 beta release](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.3.1-beta.1).
    For the earlier stable experiment, use the [v0.2.0 beta](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.2.0-beta.1).
 2. Transfer the VPK to the Vita.
 3. Install it with VitaShell.
@@ -188,3 +188,7 @@ endorsed by Microsoft, Xbox, Sony, or PlayStation.
 ## License
 
 GreenVita is licensed under the [Mozilla Public License 2.0](LICENSE).
+
+### Experimental Xbox Remote Play (xHome)
+
+The v0.3.1 beta improves console-to-Vita streaming by deriving IPv4 ICE candidates from Xbox Teredo (RFC 4380), adding an optional **private Xbox LAN IPv4** setting to avoid NAT hairpin when both devices are on the same LAN, and preserving xHome authentication when web cloud authorization is unavailable. The normal xCloud ICE path stays unchanged. Enable Remote Play on the Xbox, select **Home** inside GreenVita and test first with **Xbox LAN IPv4** empty. Enter a private IP such as `192.168.1.20` using the Vita on-screen keyboard only if you are on the same home network. A physical Xbox Series X|S with GTA VI installed may be streamed via Xbox Remote Play; this does not unlock GTA VI via xCloud or make the game run locally on Vita. [Detailed changes and bilingual instructions](docs/releases/v0.3.1-beta.1.md).
