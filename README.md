@@ -27,7 +27,7 @@ You need a homebrew-enabled PS Vita with VitaShell and an Xbox account that has
 access to Xbox Cloud Gaming.
 
 1. Download `green-vita.vpk` from the
-   [adaptive streaming v0.3.0 beta release](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.3.1-beta.1).
+   [adaptive streaming v0.3.0 beta release](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.4.0-beta.1).
    For the earlier stable experiment, use the [v0.2.0 beta](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.2.0-beta.1).
 2. Transfer the VPK to the Vita.
 3. Install it with VitaShell.
@@ -192,3 +192,7 @@ GreenVita is licensed under the [Mozilla Public License 2.0](LICENSE).
 ### Experimental Xbox Remote Play (xHome)
 
 The v0.3.1 beta improves console-to-Vita streaming by deriving IPv4 ICE candidates from Xbox Teredo (RFC 4380), adding an optional **private Xbox LAN IPv4** setting to avoid NAT hairpin when both devices are on the same LAN, and preserving xHome authentication when web cloud authorization is unavailable. The normal xCloud ICE path stays unchanged. Enable Remote Play on the Xbox, select **Home** inside GreenVita and test first with **Xbox LAN IPv4** empty. Enter a private IP such as `192.168.1.20` using the Vita on-screen keyboard only if you are on the same home network. A physical Xbox Series X|S with GTA VI installed may be streamed via Xbox Remote Play; this does not unlock GTA VI via xCloud or make the game run locally on Vita. [Detailed changes and bilingual instructions](docs/releases/v0.3.1-beta.1.md).
+
+### GreenVita v0.4.0 experimental Michael-engine integration
+
+This beta incorporates the advanced RTX/TWCC/RTCP feedback, H.264 access-unit repair, decoder scheduler, triple-buffered video output and performance CSV logger from [michalkrol/green-vita](https://github.com/michalkrol/green-vita), preserving MPL-2.0 authorship and the original [Day-OS](https://github.com/Day-OS/green-vita) credits. We retain this fork's experimental xgpuconsole/web fallback, private LAN/ICE xHome route, Microsoft login, 6/10/15 Mbps SDP caps, adaptive audio and 19 languages. The dynamic REMB policy was disabled in favor of Michael's feedback approach after upstream A/B tests indicated latency regressions. Before claiming performance gains, test it on a real Vita and Xbox. [Full bilingual release notes](docs/releases/v0.4.0-beta.1.md). The previous [v0.3.1 beta](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.3.1-beta.1) remains available.
