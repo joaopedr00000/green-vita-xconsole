@@ -1,0 +1,50 @@
+name: Publish GreenVita v0.4.0 Beta (PT-BR / EN)
+
+on:
+  push:
+    branches: [vita-v0.4.0-release-candidate]
+    paths: [.github/workflows/publish-green-vita-v0.4.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: green-vita-v0.4.0-beta.1-publish
+  cancel-in-progress: true
+
+jobs:
+  publish-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout bilingual release notes
+        uses: actions/checkout@v4
+      - name: Download tested VitaSDK VPK from successful build
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 45498619601
+          github-token: ${{ github.token }}
+          repository: joaopedr00000/green-vita-xconsole
+          name: GreenVita-720p-XGPUConsole-Diagnostics
+          path: dist
+      - name: Verify release assets
+        run: |
+          set -euo pipefail
+          test -s dist/green-vita.vpk
+          test -s docs/releases/v0.4.0-beta.1.md
+          echo 'VPK built from successful VitaSDK action 45498619601.'
+      - name: Publish bilingual experimental release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view v0.4.0-beta.1 >/dev/null 2>&1; then
+            echo 'Release v0.4.0-beta.1 already exists; refusing overwrite.'
+            exit 1
+          fi
+          gh release create v0.4.0-beta.1 dist/green-vita.vpk \
+            --target "$GITHUB_SHA" \
+            --title "GreenVita v0.4.0 Beta — Michael Streaming Engine / Motor Michael" \
+            --notes-file docs/releases/v0.4.0-beta.1.md \
+            --prerelease
