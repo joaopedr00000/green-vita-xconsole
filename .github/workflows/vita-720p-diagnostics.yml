@@ -2,7 +2,7 @@ name: GreenVita 720p diagnostics and transport
 
 on:
   push:
-    branches: [vita-720p-protocol-diagnostics, vita-recovery-and-stream-telemetry, vita-v0.3.0-adaptive-stream, vita-v0.3.1-xhome-fastpath, vita-v0.4.0-michael-engine, vita-v0.4.0-integration, master]
+    branches: [vita-720p-protocol-diagnostics, vita-recovery-and-stream-telemetry, vita-v0.3.0-adaptive-stream, vita-v0.3.1-xhome-fastpath, vita-v0.4.0-michael-engine, vita-v0.4.0-integration, vita-v0.4.0-release-candidate, master]
   workflow_dispatch:
 
 permissions:
