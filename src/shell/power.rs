@@ -41,6 +41,7 @@ pub struct StreamingPowerGuard {
     stop: Arc<AtomicBool>,
     ticker: Option<thread::JoinHandle<()>>,
     saved: SavedClocks,
+    active: bool,
 }
 
 pub fn engage() -> StreamingPowerGuard {
@@ -48,6 +49,7 @@ pub fn engage() -> StreamingPowerGuard {
         return StreamingPowerGuard {
             stop: Arc::new(AtomicBool::new(true)),
             ticker: None,
+            active: false,
             saved: SavedClocks {
                 arm: 0,
                 bus: 0,
@@ -95,11 +97,13 @@ pub fn engage() -> StreamingPowerGuard {
         stop,
         ticker,
         saved,
+        active: true,
     }
 }
 
 impl Drop for StreamingPowerGuard {
     fn drop(&mut self) {
+        if !self.active { return; }
         self.stop.store(true, Ordering::Relaxed);
         if let Some(ticker) = self.ticker.take() {
             let _ = ticker.join();
