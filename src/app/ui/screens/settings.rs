@@ -18,6 +18,7 @@ pub enum Command {
     SetFrontTouchAuxiliaryButtons { title_id: String, enabled: bool },
     SetShowStreamDebugInfo(bool),
     SetStreamProfile(StreamProfile),
+    SetCloudRegion(Option<String>),
 }
 
 #[derive(Clone)]
@@ -29,6 +30,7 @@ enum SettingsRow {
     GameFrontTouchAuxiliary { title_id: String, enabled: bool },
     StreamDebug(bool),
     StreamingProfile(StreamProfile),
+    CloudRegion,
     Back,
 }
 
@@ -68,6 +70,9 @@ fn settings_rows(app: &App) -> Vec<SettingsRow> {
             .game_profile(&title_id)
             .is_some_and(|profile| profile.front_touch_auxiliary_buttons);
         rows.push(SettingsRow::GameFrontTouchAuxiliary { title_id, enabled });
+    }
+    if app.service.api.config.cloud.regions.len() > 1 {
+        rows.push(SettingsRow::CloudRegion);
     }
     rows.push(SettingsRow::StreamingProfile(app.settings.stream_profile));
     rows.push(SettingsRow::StreamDebug(
@@ -223,6 +228,30 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
 
                 ui.add_space(14.0);
                 ui.separator();
+                let regions = &app.service.api.config.cloud.regions;
+                if regions.len() > 1 {
+                    let current_host = app.settings.preferred_cloud_region.as_deref();
+                    let current = current_host.and_then(|host| regions.iter().find(|r| r.host == host));
+                    let label = current.map(|r| r.name.as_str())
+                        .unwrap_or_else(|| "Auto");
+                    let rtt = current_host.and_then(|host| app.region_ping_ms.lock().ok()
+                        .and_then(|map| map.get(host).copied()));
+                    let rtt_text = rtt.map(|ms| format!("  [HTTPS {ms} ms]"))
+                        .unwrap_or_default();
+                    ui.add_space(8.0);
+                    if focus_row(ui, selected_index == row_index,
+                        format!("{}: {}{} >", i18n.text("settings-cloud-region"), label, rtt_text)) {
+                        let next = match current_host {
+                            None => regions.first().map(|r| r.host.clone()),
+                            Some(host) => regions.iter().position(|r| r.host == host)
+                                .and_then(|index| regions.get(index + 1))
+                                .map(|r| r.host.clone()),
+                        };
+                        commands.push(Command::SetCloudRegion(next).into());
+                    }
+                    row_index += 1;
+                    ui.small(i18n.text("settings-cloud-region-hint"));
+                }
                 let current_profile = app.settings.stream_profile;
                 let profile_label = match current_profile {
                     StreamProfile::LowLatency => i18n.text("settings-profile-low"),
@@ -251,6 +280,14 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
                     );
                 }
                 row_index += 1;
+
+                ui.add_space(8.0);
+                ui.small(i18n.text("settings-wifi-turbo-hint"));
+                if let Some(version) = app.release_update.lock().ok().and_then(|v| v.clone()) {
+                    let mut args = FluentArgs::new();
+                    args.set("version", arg_string(version));
+                    ui.colored_label(theme.accent, i18n.text_with("update-available", args));
+                }
 
                 ui.add_space(14.0);
                 ui.separator();
@@ -412,6 +449,16 @@ impl App {
                     enabled: !enabled,
                 });
             }
+            SettingsRow::CloudRegion => {
+                let regions = &self.service.api.config.cloud.regions;
+                let next = match self.settings.preferred_cloud_region.as_deref() {
+                    None => regions.first().map(|r| r.host.clone()),
+                    Some(host) => regions.iter().position(|r| r.host == host)
+                        .and_then(|index| regions.get(index + 1))
+                        .map(|r| r.host.clone()),
+                };
+                return self.handle_settings_command(Command::SetCloudRegion(next));
+            }
             SettingsRow::StreamingProfile(profile) => {
                 let next = match profile {
                     StreamProfile::LowLatency => StreamProfile::Balanced,
@@ -493,6 +540,17 @@ impl App {
                 self.settings
                     .set_front_touch_auxiliary_buttons(title_id, enabled);
                 self.settings.save();
+            }
+            Command::SetCloudRegion(region) => {
+                let allowed = region.as_ref().is_none_or(|host| self.service.api.config.cloud
+                    .regions.iter().any(|r| &r.host == host));
+                if allowed {
+                    self.settings.preferred_cloud_region = region.clone();
+                    self.service.api.config.cloud.host = region.unwrap_or_else(||
+                        self.service.api.config.cloud.default_host.clone());
+                    self.settings.save();
+                    self.service.refresh_xcloud_catalog_backend();
+                }
             }
             Command::SetStreamProfile(profile) => {
                 self.settings.stream_profile = profile;
