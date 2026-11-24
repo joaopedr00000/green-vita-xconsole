@@ -25,6 +25,15 @@ const TOKEN_AAD: &[u8] = b"green-vita/xcloud-refresh-token/v1";
 pub struct EndpointCredentials {
     pub host: String,
     pub token: String,
+    pub default_host: String,
+    pub regions: Vec<RegionEndpoint>,
+}
+/// Only server-advertised HTTPS region hosts are selectable. Never accept
+/// arbitrary user-supplied endpoints for requests carrying cloud tokens.
+#[derive(Debug, Clone)]
+pub struct RegionEndpoint {
+    pub name: String,
+    pub host: String,
 }
 
 #[derive(Debug, Clone)]
@@ -165,20 +174,29 @@ struct StreamingRegion {
     base_uri: String,
     #[serde(rename = "isDefault")]
     is_default: bool,
+    #[serde(default)]
+    name: Option<String>,
 }
 
 impl StreamingTokenResponse {
     fn into_credentials(self) -> Result<EndpointCredentials> {
-        let region = self
-            .offering_settings
-            .regions
-            .into_iter()
-            .find(|region| region.is_default)
-            .context("streaming token response had no default region")?;
-
+        let all = self.offering_settings.regions;
+        let region = all.iter()
+            .find(|region| region.is_default && region.base_uri.starts_with("https://"))
+            .context("streaming token response had no valid HTTPS default region")?;
+        let default_host = region.base_uri.clone();
+        let regions = all.into_iter()
+            .filter(|region| region.base_uri.starts_with("https://"))
+            .map(|region| RegionEndpoint {
+                name: region.name.unwrap_or_else(|| region.base_uri.clone()),
+                host: region.base_uri,
+            })
+            .collect();
         Ok(EndpointCredentials {
-            host: region.base_uri,
+            host: default_host.clone(),
             token: self.gs_token,
+            default_host,
+            regions,
         })
     }
 }
