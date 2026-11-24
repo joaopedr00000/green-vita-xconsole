@@ -42,6 +42,7 @@ pub struct App {
 impl App {
     pub fn new() -> Result<Self> {
         let settings = Settings::load();
+        crate::settings::set_active_stream_profile(settings.stream_profile);
         let service = Service::new(settings.locale.as_str());
 
         Ok(Self {
