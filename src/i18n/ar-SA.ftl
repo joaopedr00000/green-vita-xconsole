@@ -79,3 +79,10 @@ error-stream-state = فشل التحقق من حالة البث
 error-webrtc-session = فشلت جلسة WebRTC
 error-stream-ended = انتهت جلسة البث
 error-technical-details = التفاصيل التقنية: { $error }
+
+settings-stream-profile = ملف البث
+settings-profile-low = زمن وصول منخفض (حتى 6 Mbps)
+settings-profile-balanced = متوازن (حتى 10 Mbps)
+settings-profile-quality = جودة عالية (حتى 15 Mbps)
+paused-restart-stream = إعادة تشغيل البث
+update-available = إصدار جديد متاح: { $version }

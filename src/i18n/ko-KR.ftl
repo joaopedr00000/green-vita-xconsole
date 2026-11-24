@@ -79,3 +79,10 @@ error-stream-state = 스트리밍 상태 확인 실패
 error-webrtc-session = WebRTC 세션 실패
 error-stream-ended = 스트리밍 세션 종료됨
 error-technical-details = 기술 세부 정보: { $error }
+
+settings-stream-profile = 스트리밍 프로필
+settings-profile-low = 낮은 지연 (최대 6 Mbps)
+settings-profile-balanced = 균형 (최대 10 Mbps)
+settings-profile-quality = 화질 우선 (최대 15 Mbps)
+paused-restart-stream = 스트림 다시 시작
+update-available = 새 버전 사용 가능: { $version }

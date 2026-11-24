@@ -79,3 +79,10 @@ error-stream-state = Ошибка проверки трансляции
 error-webrtc-session = Ошибка сеанса WebRTC
 error-stream-ended = Сеанс трансляции завершён
 error-technical-details = Технические сведения: { $error }
+
+settings-stream-profile = Профиль стриминга
+settings-profile-low = Низкая задержка (до 6 Мбит/с)
+settings-profile-balanced = Баланс (до 10 Мбит/с)
+settings-profile-quality = Качество (до 15 Мбит/с)
+paused-restart-stream = Перезапустить трансляцию
+update-available = Доступна новая версия: { $version }

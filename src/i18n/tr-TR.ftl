@@ -79,3 +79,10 @@ error-stream-state = Yayın durumu denetlenemedi
 error-webrtc-session = WebRTC oturumu başarısız
 error-stream-ended = Yayın oturumu sona erdi
 error-technical-details = Teknik ayrıntılar: { $error }
+
+settings-stream-profile = Akış profili
+settings-profile-low = Düşük gecikme (en fazla 6 Mbps)
+settings-profile-balanced = Dengeli (en fazla 10 Mbps)
+settings-profile-quality = Kalite (en fazla 15 Mbps)
+paused-restart-stream = Akışı yeniden başlat
+update-available = Yeni sürüm mevcut: { $version }

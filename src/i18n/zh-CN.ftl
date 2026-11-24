@@ -79,3 +79,10 @@ error-stream-state = 检查串流状态失败
 error-webrtc-session = WebRTC 会话失败
 error-stream-ended = 串流会话已结束
 error-technical-details = 技术详情：{ $error }
+
+settings-stream-profile = 串流模式
+settings-profile-low = 低延迟（最高 6 Mbps）
+settings-profile-balanced = 均衡（最高 10 Mbps）
+settings-profile-quality = 高画质（最高 15 Mbps）
+paused-restart-stream = 重新连接串流
+update-available = 有新版本：{ $version }

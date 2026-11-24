@@ -79,3 +79,10 @@ error-stream-state = Nie udało się sprawdzić transmisji
 error-webrtc-session = Sesja WebRTC nie powiodła się
 error-stream-ended = Sesja transmisji zakończona
 error-technical-details = Szczegóły techniczne: { $error }
+
+settings-stream-profile = Profil strumieniowania
+settings-profile-low = Małe opóźnienie (maks. 6 Mb/s)
+settings-profile-balanced = Zrównoważony (maks. 10 Mb/s)
+settings-profile-quality = Jakość (maks. 15 Mb/s)
+paused-restart-stream = Uruchom strumień ponownie
+update-available = Nowa wersja: { $version }

@@ -79,3 +79,10 @@ error-stream-state = Kunde inte kontrollera strömmen
 error-webrtc-session = WebRTC-session misslyckades
 error-stream-ended = Strömningssessionen avslutades
 error-technical-details = Tekniska detaljer: { $error }
+
+settings-stream-profile = Strömningsprofil
+settings-profile-low = Låg latens (max 6 Mbps)
+settings-profile-balanced = Balanserat (max 10 Mbps)
+settings-profile-quality = Kvalitet (max 15 Mbps)
+paused-restart-stream = Starta om strömmen
+update-available = Ny version tillgänglig: { $version }

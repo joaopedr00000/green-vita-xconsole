@@ -79,3 +79,10 @@ error-stream-state = Streamstatus controleren mislukt
 error-webrtc-session = WebRTC-sessie mislukt
 error-stream-ended = Streamsessie beëindigd
 error-technical-details = Technische details: { $error }
+
+settings-stream-profile = Streamingprofiel
+settings-profile-low = Lage latentie (max. 6 Mbps)
+settings-profile-balanced = Gebalanceerd (max. 10 Mbps)
+settings-profile-quality = Kwaliteit (max. 15 Mbps)
+paused-restart-stream = Stream opnieuw starten
+update-available = Nieuwe versie beschikbaar: { $version }
