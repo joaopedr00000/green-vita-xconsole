@@ -7,6 +7,7 @@ use sdl2::render::{Canvas, Texture};
 use sdl2::video::Window;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 pub const WIDTH: u32 = 960;
 pub const HEIGHT: u32 = 544;
@@ -19,6 +20,7 @@ pub struct VitaSurface {
     video_width: u32,
     video_height: u32,
     last_frame_id: u64,
+    pending_display_timestamps: Option<(Instant, Instant)>, 
     egui_painter: SdlEguiPainter,
 }
 
@@ -48,6 +50,7 @@ impl VitaSurface {
             video_width: 0,
             video_height: 0,
             last_frame_id: 0,
+            pending_display_timestamps: None,
             egui_painter: SdlEguiPainter::default(),
         })
     }
@@ -78,6 +81,7 @@ impl VitaSurface {
             output.mark_displayed(index, frame.generation);
         }
         self.displayed_video_texture = Some(index);
+        self.pending_display_timestamps = Some((frame.decoded_at, frame.enqueued_at));
         crate::streaming::video::metrics::METRICS
             .presented
             .fetch_add(1, Ordering::Relaxed);
@@ -153,6 +157,7 @@ impl VitaSurface {
         self.video_width = 0;
         self.video_height = 0;
         self.last_frame_id = 0;
+        self.pending_display_timestamps = None;
     }
 
     pub fn draw_scene(&mut self, show_video: bool) -> Result<()> {
@@ -190,6 +195,17 @@ impl VitaSurface {
             textures_delta,
         )?;
         self.canvas.present();
+        if let Some((decoded_at, enqueued_at)) = self.pending_display_timestamps.take() {
+            let now = Instant::now();
+            crate::streaming::video::metrics::METRICS.display_queue_us.store(
+                now.saturating_duration_since(decoded_at).as_micros() as u64,
+                Ordering::Relaxed,
+            );
+            crate::streaming::video::metrics::METRICS.total_video_pipeline_us.store(
+                now.saturating_duration_since(enqueued_at).as_micros() as u64,
+                Ordering::Relaxed,
+            );
+        }
         Ok(())
     }
 
