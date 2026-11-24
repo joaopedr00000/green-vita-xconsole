@@ -251,6 +251,15 @@ impl App {
         match result {
             Ok((stream, StreamState::Provisioned)) => {
                 session.stream = stream;
+                if session.kind == StreamKind::Home {
+                    crate::diagnostics::step("xhome_session", "PROVISIONED_NOT_YET_VIDEO");
+                    if let Some(lan_ip) = self.settings.home_console_lan_ip.as_deref()
+                        .and_then(|ip| ip.parse::<std::net::Ipv4Addr>().ok())
+                        .filter(|ip| ip.is_private())
+                    {
+                        session.stream.set_console_lan_ip(lan_ip);
+                    }
+                }
                 self.service.auth = MsalAuth::new();
                 let title_id = session.game_id.clone();
                 match StreamingSession::start_xbox(
