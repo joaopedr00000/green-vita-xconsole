@@ -19,6 +19,8 @@ pub enum Command {
     SetShowStreamDebugInfo(bool),
     SetStreamProfile(StreamProfile),
     SetCloudRegion(Option<String>),
+    EditHomeLanIp,
+    SetHomeShoulderSwap(bool),
 }
 
 #[derive(Clone)]
@@ -31,6 +33,8 @@ enum SettingsRow {
     StreamDebug(bool),
     StreamingProfile(StreamProfile),
     CloudRegion,
+    HomeLanIp,
+    HomeShoulderSwap(bool),
     Back,
 }
 
@@ -71,6 +75,10 @@ fn settings_rows(app: &App) -> Vec<SettingsRow> {
             .is_some_and(|profile| profile.front_touch_auxiliary_buttons);
         rows.push(SettingsRow::GameFrontTouchAuxiliary { title_id, enabled });
     }
+    if title_id.is_none() {
+        rows.push(SettingsRow::HomeShoulderSwap(app.settings.swap_home_shoulders_and_triggers));
+    }
+    rows.push(SettingsRow::HomeLanIp);
     if app.service.api.config.cloud.regions.len() > 1 {
         rows.push(SettingsRow::CloudRegion);
     }
@@ -207,6 +215,29 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
                     row_index += 1;
                 }
 
+                ui.add_space(14.0);
+                ui.separator();
+                ui.heading(egui::RichText::new(i18n.text("settings-xhome-heading")).color(theme.text_bright));
+                if title_id.is_none() {
+                    let swap = app.settings.swap_home_shoulders_and_triggers;
+                    if checkbox_row(ui, selected_index == row_index, swap,
+                        i18n.text("settings-xhome-shoulder-swap")) {
+                        commands.push(Command::SetHomeShoulderSwap(!swap).into());
+                    }
+                    row_index += 1;
+                }
+                let ip_label = app.settings.home_console_lan_ip.as_deref().unwrap_or("Auto");
+                let display_ip = format!("{}: {} >",
+                    i18n.text("settings-xhome-ip"), ip_label);
+                if focus_row(ui, selected_index == row_index, display_ip) {
+                    commands.push(Command::EditHomeLanIp.into());
+                }
+                row_index += 1;
+                ui.small(i18n.text("settings-xhome-ip-hint"));
+                if app.home_ip_invalid {
+                    ui.colored_label(egui::Color32::LIGHT_RED,
+                        i18n.text("settings-xhome-ip-invalid"));
+                }
                 ui.add_space(14.0);
                 ui.separator();
                 ui.colored_label(
@@ -449,6 +480,12 @@ impl App {
                     enabled: !enabled,
                 });
             }
+            SettingsRow::HomeShoulderSwap(enabled) => {
+                return self.handle_settings_command(Command::SetHomeShoulderSwap(!enabled));
+            }
+            SettingsRow::HomeLanIp => {
+                return self.handle_settings_command(Command::EditHomeLanIp);
+            }
             SettingsRow::CloudRegion => {
                 let regions = &self.service.api.config.cloud.regions;
                 let next = match self.settings.preferred_cloud_region.as_deref() {
@@ -539,6 +576,14 @@ impl App {
             Command::SetFrontTouchAuxiliaryButtons { title_id, enabled } => {
                 self.settings
                     .set_front_touch_auxiliary_buttons(title_id, enabled);
+                self.settings.save();
+            }
+            Command::EditHomeLanIp => {
+                self.home_ip_invalid = false;
+                self.home_ip_edit_requested = true;
+            }
+            Command::SetHomeShoulderSwap(enabled) => {
+                self.settings.swap_home_shoulders_and_triggers = enabled;
                 self.settings.save();
             }
             Command::SetCloudRegion(region) => {
