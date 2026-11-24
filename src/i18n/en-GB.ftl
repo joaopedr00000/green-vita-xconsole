@@ -86,3 +86,7 @@ settings-profile-balanced = Balanced (10 Mbps max)
 settings-profile-quality = Quality (15 Mbps max)
 paused-restart-stream = Restart stream
 update-available = New version available: { $version }
+
+settings-cloud-region = Xbox cloud region
+settings-cloud-region-hint = HTTPS timing is only a connectivity hint; it is not gameplay ping. Changes apply to new sessions.
+settings-wifi-turbo-hint = Wi-Fi Turbo: use a clean 2.4 GHz network; compare jitter and frame losses. No Turbo TCP control API is accessed.
