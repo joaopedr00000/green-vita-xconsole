@@ -37,6 +37,9 @@ pub struct App {
     pub(crate) title_initial_overlay: Option<TitleInitialOverlay>,
     pub(crate) title_search_query: String,
     pub(crate) title_search_requested: bool,
+    /// Trigger for the Vita on-screen keyboard to edit a private LAN Xbox address.
+    pub(crate) home_ip_edit_requested: bool,
+    pub(crate) home_ip_invalid: bool,
     /// At most one automatic stream rejoin per user-initiated launch.
     pub(crate) auto_reconnect_used: bool,
     pub(crate) release_update: Arc<Mutex<Option<String>>>,
@@ -64,11 +67,32 @@ impl App {
             title_initial_overlay: None,
             title_search_query: String::new(),
             title_search_requested: false,
+            home_ip_edit_requested: false,
+            home_ip_invalid: false,
             auto_reconnect_used: false,
             release_update,
             region_ping_ms: Arc::new(Mutex::new(HashMap::new())), 
             settings,
         })
+    }
+
+    pub(crate) fn set_home_lan_ip_from_keyboard(&mut self, input: String) {
+        let value = input.trim();
+        if value.is_empty() {
+            self.settings.home_console_lan_ip = None;
+            self.home_ip_invalid = false;
+            self.settings.save();
+            return;
+        }
+        let valid = value.parse::<std::net::Ipv4Addr>().ok().filter(|ip| ip.is_private());
+        if let Some(ip) = valid {
+            self.settings.home_console_lan_ip = Some(ip.to_string());
+            self.home_ip_invalid = false;
+            self.settings.save();
+        } else {
+            // No arbitrary endpoints or invalid IPs accepted for candidate rewriting.
+            self.home_ip_invalid = true;
+        }
     }
 
     fn set_state(&mut self, state: AppState) {
