@@ -5,6 +5,7 @@ use crate::app::ui::theme::Theme;
 use crate::app::ui::widgets::smooth_scroll_area;
 use crate::i18n::{I18n, arg_string};
 use crate::{App, AppCommand, AppState, Locale};
+use crate::settings::StreamProfile;
 use anyhow::Result;
 use fluent_bundle::FluentArgs;
 
@@ -16,6 +17,7 @@ pub enum Command {
     SetRearTouchEnabled { title_id: String, enabled: bool },
     SetFrontTouchAuxiliaryButtons { title_id: String, enabled: bool },
     SetShowStreamDebugInfo(bool),
+    SetStreamProfile(StreamProfile),
 }
 
 #[derive(Clone)]
@@ -26,6 +28,7 @@ enum SettingsRow {
     GameRearTouch { title_id: String, enabled: bool },
     GameFrontTouchAuxiliary { title_id: String, enabled: bool },
     StreamDebug(bool),
+    StreamingProfile(StreamProfile),
     Back,
 }
 
@@ -66,6 +69,7 @@ fn settings_rows(app: &App) -> Vec<SettingsRow> {
             .is_some_and(|profile| profile.front_touch_auxiliary_buttons);
         rows.push(SettingsRow::GameFrontTouchAuxiliary { title_id, enabled });
     }
+    rows.push(SettingsRow::StreamingProfile(app.settings.stream_profile));
     rows.push(SettingsRow::StreamDebug(
         app.settings.show_stream_debug_info,
     ));
@@ -219,6 +223,22 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
 
                 ui.add_space(14.0);
                 ui.separator();
+                let current_profile = app.settings.stream_profile;
+                let profile_label = match current_profile {
+                    StreamProfile::LowLatency => i18n.text("settings-profile-low"),
+                    StreamProfile::Balanced => i18n.text("settings-profile-balanced"),
+                    StreamProfile::Quality => i18n.text("settings-profile-quality"),
+                };
+                if focus_row(ui, selected_index == row_index, format!("{}: {} >", i18n.text("settings-stream-profile"), profile_label)) {
+                    let next = match current_profile {
+                        StreamProfile::LowLatency => StreamProfile::Balanced,
+                        StreamProfile::Balanced => StreamProfile::Quality,
+                        StreamProfile::Quality => StreamProfile::LowLatency,
+                    };
+                    commands.push(Command::SetStreamProfile(next).into());
+                }
+                row_index += 1;
+                ui.add_space(6.0);
                 if checkbox_row(
                     ui,
                     selected_index == row_index,
@@ -392,6 +412,14 @@ impl App {
                     enabled: !enabled,
                 });
             }
+            SettingsRow::StreamingProfile(profile) => {
+                let next = match profile {
+                    StreamProfile::LowLatency => StreamProfile::Balanced,
+                    StreamProfile::Balanced => StreamProfile::Quality,
+                    StreamProfile::Quality => StreamProfile::LowLatency,
+                };
+                return self.handle_settings_command(Command::SetStreamProfile(next));
+            }
             SettingsRow::StreamDebug(enabled) => {
                 return self.handle_settings_command(Command::SetShowStreamDebugInfo(!enabled));
             }
@@ -464,6 +492,11 @@ impl App {
             Command::SetFrontTouchAuxiliaryButtons { title_id, enabled } => {
                 self.settings
                     .set_front_touch_auxiliary_buttons(title_id, enabled);
+                self.settings.save();
+            }
+            Command::SetStreamProfile(profile) => {
+                self.settings.stream_profile = profile;
+                crate::settings::set_active_stream_profile(profile);
                 self.settings.save();
             }
             Command::SetShowStreamDebugInfo(enabled) => {
