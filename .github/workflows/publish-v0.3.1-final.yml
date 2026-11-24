@@ -1,0 +1,71 @@
+name: Build and publish GreenVita v0.3.1 Final
+on:
+  push:
+    branches: [vita-v0.3.1-final-publish]
+    paths: [.github/workflows/publish-v0.3.1-final.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: green-vita-v031-final
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/vita-rust/vitasdk-rs:latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 52eb20bd2a7ea0f5d690544022a7166435c15800
+          submodules: recursive
+      - name: Build final Vita VPK
+        env:
+          RUSTFLAGS: "-C target-feature=-neon"
+        run: cargo vita build vpk --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: green-vita-v0.3.1
+          path: target/armv7-sony-vita-newlibeabihf/release/green-vita.vpk
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: green-vita-v0.3.1
+          path: dist
+      - name: Publish stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          test -s dist/green-vita.vpk
+          if gh release view v0.3.1 >/dev/null 2>&1; then
+            echo 'Release already exists; refusing to overwrite.'
+            exit 1
+          fi
+          cat > /tmp/release.md <<'EOF'
+          ## Português
+          GreenVita v0.3.1 Final é a versão estável baseada diretamente na v0.3.0 original restaurada, escolhida pela qualidade de transmissão observada pelo desenvolvedor.
+          
+          - Mantém integralmente o motor de streaming, a latência, o bitrate adaptativo, os controles e a interface da v0.3.0.
+          - Corrige exclusivamente o texto da opção Home (Xbox console → PS Vita) nos 19 idiomas.
+          - Atualiza a identificação interna para 0.3.1. Não é uma versão beta.
+          - Não incorpora as alterações das versões posteriores.
+          
+          ## English
+          GreenVita v0.3.1 Final is the stable release based directly on the restored original v0.3.0, selected for its streaming quality observed by the developer.
+          
+          - Retains the original v0.3.0 streaming engine, latency settings, adaptive bitrate, controls and interface.
+          - Corrects only the Home (Xbox console → PS Vita) subtitle in all 19 locales.
+          - Updates the internal version to 0.3.1; this is not a beta.
+          - No changes from later versions are included.
+          
+          Thanks to Day-OS, the original GreenVita creator, and the PS Vita homebrew community.
+          EOF
+          gh release create v0.3.1 dist/green-vita.vpk --target 52eb20bd2a7ea0f5d690544022a7166435c15800 --title 'GreenVita v0.3.1 Final' --notes-file /tmp/release.md --latest
