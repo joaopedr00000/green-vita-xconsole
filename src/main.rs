@@ -11,6 +11,7 @@ mod safe_memory;
 mod settings;
 mod shell;
 mod streaming;
+mod updates;
 
 use api_xbox::api::{
     ApiClient, ApiClientConfig, Console, ConsolesResponse, StreamKind, WaitTimeResponse,
