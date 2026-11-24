@@ -79,3 +79,10 @@ error-stream-state = Failed to check stream state
 error-webrtc-session = WebRTC session failed
 error-stream-ended = Stream session ended
 error-technical-details = Technical details: { $error }
+
+settings-stream-profile = Streaming profile
+settings-profile-low = Low latency (6 Mbps max)
+settings-profile-balanced = Balanced (10 Mbps max)
+settings-profile-quality = Quality (15 Mbps max)
+paused-restart-stream = Restart stream
+update-available = New version available: { $version }

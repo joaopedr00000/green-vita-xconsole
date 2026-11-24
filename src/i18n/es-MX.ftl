@@ -79,3 +79,10 @@ error-stream-state = Error al verificar la transmisión
 error-webrtc-session = Error en la sesión WebRTC
 error-stream-ended = La sesión de transmisión terminó
 error-technical-details = Detalles técnicos: { $error }
+
+settings-stream-profile = Perfil de transmisión
+settings-profile-low = Baja latencia (máx. 6 Mbps)
+settings-profile-balanced = Equilibrado (máx. 10 Mbps)
+settings-profile-quality = Calidad (máx. 15 Mbps)
+paused-restart-stream = Reiniciar transmisión
+update-available = Nueva versión disponible: { $version }
