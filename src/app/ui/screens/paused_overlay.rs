@@ -10,13 +10,15 @@ pub enum Command {
     Resume,
     Settings,
     PressGuideButton,
+    RestartStream,
     ExitGame,
 }
 
-pub const MENU_ITEMS: [Command; 4] = [
+pub const MENU_ITEMS: [Command; 5] = [
     Command::Resume,
     Command::Settings,
     Command::PressGuideButton,
+    Command::RestartStream,
     Command::ExitGame,
 ];
 
@@ -26,6 +28,7 @@ impl Command {
             Self::Resume => "\u{25b6}",
             Self::Settings => "\u{2699}",
             Self::PressGuideButton => "\u{2302}",
+            Self::RestartStream => "\u{21bb}",
             Self::ExitGame => "\u{2715}",
         }
     }
@@ -35,6 +38,7 @@ impl Command {
             Self::Resume => "paused-resume",
             Self::Settings => "menu-settings",
             Self::PressGuideButton => "paused-xbox-button",
+            Self::RestartStream => "paused-restart-stream",
             Self::ExitGame => "paused-exit-game",
         }
     }
@@ -136,6 +140,9 @@ impl App {
                     streaming.press_guide_button();
                 }
                 self.menu.open = false;
+            }
+            Command::RestartStream => {
+                self.restart_stream().await;
             }
             Command::ExitGame => {
                 self.exit_stream().await;
