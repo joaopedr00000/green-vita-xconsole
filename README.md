@@ -26,8 +26,9 @@
 You need a homebrew-enabled PS Vita with VitaShell and an Xbox account that has
 access to Xbox Cloud Gaming.
 
-1. Download `green-vita-xgpuconsole-experimental.vpk` from the
-   [first experimental release](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/Test).
+1. Download `green-vita.vpk` from the
+   [adaptive streaming v0.3.0 beta release](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.3.0-beta.1).
+   For the earlier stable experiment, use the [v0.2.0 beta](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.2.0-beta.1).
 2. Transfer the VPK to the Vita.
 3. Install it with VitaShell.
 4. Launch GreenVita and complete the device-code sign-in.
@@ -40,7 +41,7 @@ access to Xbox Cloud Gaming.
 
 This fork keeps the original GreenVita interface, settings, controller support, xCloud and xHome features. When connecting to Xbox Cloud Gaming, it automatically tries the `xgpuconsole` offering with Xbox One client metadata and silently falls back to the original `xgpuweb`/`xgpuwebf2p` connection when the console attempt fails. The console attempt is **experimental** and does not provide genuine Xbox hardware authentication, guarantee game compatibility or bypass Microsoft's server-side access controls.
 
-The original source project is [Day-OS/green-vita](https://github.com/Day-OS/green-vita). This fork includes the extra console-offering experiment.
+The original source project is [Day-OS/green-vita](https://github.com/Day-OS/green-vita). This fork includes the extra console-offering experiment and optional adaptive streaming profiles (6/10/15 Mbps requested RTCP REMB), video jitter diagnostics, adaptive audio buffering and manual session restart. Console-only games are not confirmed playable.
 
 ## Build
 
