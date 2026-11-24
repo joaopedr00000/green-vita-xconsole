@@ -1,6 +1,7 @@
 //! Read-only update notification. Never installs VPKs or follows untrusted download URLs.
 use std::time::Duration;
-const CURRENT_VERSION: &str = "v0.3.1-beta.1";
+// Use the actual package version so each future release identifies itself correctly.
+const CURRENT_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 const RELEASES_URL: &str = "https://api.github.com/repos/joaopedr00000/green-vita-xconsole/releases?per_page=5";
 
 fn version_rank(tag: &str) -> Option<(u32, u32, u32, u32, u32)> {
