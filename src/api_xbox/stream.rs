@@ -5,7 +5,12 @@ use reqwest::Method;
 use rtc::peer_connection::transport::RTCIceCandidateInit;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::net::{Ipv4Addr, Ipv6Addr};
+
 use tokio::time::{Duration, sleep};
+
+const XBOX_HOME_STREAM_PORT: u16 = 9002;
+
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,6 +50,10 @@ pub struct Stream {
     pub state: StreamState,
     /// True only for the experimental xgpuconsole play attempt.
     pub(crate) is_console: bool,
+    /// Xbox Remote Play (xHome), distinct from experimental xgpuconsole cloud offering.
+    is_home: bool,
+    /// Optional RFC1918 LAN address entered by the owner; never used for xCloud.
+    console_lan_ip: Option<Ipv4Addr>,
 }
 
 #[derive(Deserialize)]
@@ -60,6 +69,7 @@ impl Stream {
         credentials: EndpointCredentials,
         response: StartStreamResponse,
         is_console: bool,
+        is_home: bool,
     ) -> Self {
         let session_id = response
             .session_path
@@ -75,6 +85,16 @@ impl Stream {
             session_path: response.session_path,
             state: StreamState::New,
             is_console,
+            is_home,
+            console_lan_ip: None,
+        }
+    }
+
+    /// Only local/private addresses are permitted as manual LAN optimizations.
+    pub fn set_console_lan_ip(&mut self, ip: Ipv4Addr) {
+        if self.is_home && ip.is_private() {
+            self.console_lan_ip = Some(ip);
+            crate::diagnostics::step("xhome_route", "LAN_IPV4_OVERRIDE_ENABLED");
         }
     }
 
@@ -227,7 +247,11 @@ impl Stream {
             return Ok(None);
         }
         check_exchange_error(&value)?;
-        Ok(Some(extract_remote_candidates(&value)))
+        Ok(Some(extract_remote_candidates(
+            &value,
+            self.is_home,
+            self.console_lan_ip,
+        )))
     }
 
     pub async fn send_keepalive(&self) -> Result<Value> {
@@ -300,7 +324,11 @@ fn serialize_local_candidate(candidate: &RTCIceCandidateInit) -> String {
     serde_json::to_string(&value).expect("ICE candidate JSON serialization should not fail")
 }
 
-fn extract_remote_candidates(response: &Value) -> Vec<RTCIceCandidateInit> {
+fn extract_remote_candidates(
+    response: &Value,
+    is_home: bool,
+    lan_override: Option<Ipv4Addr>,
+) -> Vec<RTCIceCandidateInit> {
     let Some(exchange) = response.get("exchangeResponse").and_then(Value::as_str) else {
         return Vec::new();
     };
@@ -314,18 +342,32 @@ fn extract_remote_candidates(response: &Value) -> Vec<RTCIceCandidateInit> {
         return Vec::new();
     };
 
-    candidates
-        .iter()
-        .filter_map(decode_remote_candidate)
-        .collect()
+    let mut decoded = Vec::new();
+    for item in candidates {
+        let parsed: Option<RTCIceCandidateInit> = match item {
+            Value::String(value) => serde_json::from_str(value).ok(),
+            value => serde_json::from_value(value.clone()).ok(),
+        };
+        let Some(parsed) = parsed else { continue };
+        if is_home {
+            for derived in teredo_host_candidates(&parsed, lan_override) {
+                if !decoded.iter().any(|known: &RTCIceCandidateInit|
+                    known.candidate == derived.candidate) {
+                    decoded.push(derived);
+                }
+            }
+        }
+        if let Some(normalized) = normalize_decoded_candidate(parsed) {
+            if !decoded.iter().any(|known: &RTCIceCandidateInit|
+                known.candidate == normalized.candidate) {
+                decoded.push(normalized);
+            }
+        }
+    }
+    decoded
 }
 
-fn decode_remote_candidate(candidate: &Value) -> Option<RTCIceCandidateInit> {
-    let mut candidate: RTCIceCandidateInit = match candidate {
-        Value::String(value) => serde_json::from_str(value).ok(),
-        value => serde_json::from_value(value.clone()).ok(),
-    }?;
-
+fn normalize_decoded_candidate(mut candidate: RTCIceCandidateInit) -> Option<RTCIceCandidateInit> {
     candidate.candidate = normalize_remote_candidate(&candidate.candidate)?;
     if candidate.sdp_mid.as_deref() == Some("") {
         candidate.sdp_mid = Some("0".to_owned());
@@ -334,6 +376,46 @@ fn decode_remote_candidate(candidate: &Value) -> Option<RTCIceCandidateInit> {
         candidate.sdp_mline_index = Some(0);
     }
     Some(candidate)
+}
+
+/// Xbox Remote Play can advertise Teredo IPv6 candidates that encode its public
+/// IPv4 and UDP port. rtc's Vita IPv4 socket cannot connect to those IPv6
+/// candidates directly. Create IPv4 ICE candidates for xHome ONLY; preserve
+/// the original IPv4 candidates so LAN hosts keep their normal behavior.
+///
+/// RFC 4380: 2001:0000::/32, obfuscated UDP port and IPv4 in trailing segments.
+fn teredo_host_candidates(
+    candidate: &RTCIceCandidateInit,
+    lan_override: Option<Ipv4Addr>,
+) -> Vec<RTCIceCandidateInit> {
+    let Some((wan, encoded_port)) = candidate_address(&candidate.candidate)
+        .and_then(teredo_endpoint) else { return Vec::new() };
+    let ip = lan_override.filter(Ipv4Addr::is_private).unwrap_or(wan);
+    let candidate_for_port = |foundation: u8, port: u16| RTCIceCandidateInit {
+        candidate: format!("candidate:{foundation} 1 UDP 1 {ip} {port} typ host"),
+        sdp_mid: candidate.sdp_mid.clone().filter(|s| !s.is_empty())
+            .or_else(|| Some("0".to_owned())),
+        sdp_mline_index: Some(candidate.sdp_mline_index.unwrap_or(0)),
+        username_fragment: candidate.username_fragment.clone(),
+        url: None,
+    };
+    let mut out = vec![candidate_for_port(10, XBOX_HOME_STREAM_PORT)];
+    if encoded_port != XBOX_HOME_STREAM_PORT && encoded_port != 0 {
+        out.push(candidate_for_port(11, encoded_port));
+    }
+    out
+}
+fn candidate_address(candidate: &str) -> Option<&str> {
+    let trimmed = candidate.trim();
+    let trimmed = trimmed.strip_prefix("a=").unwrap_or(trimmed);
+    trimmed.starts_with("candidate:").then(|| trimmed.split_whitespace().nth(4)).flatten()
+}
+fn teredo_endpoint(address: &str) -> Option<(Ipv4Addr, u16)> {
+    let segments = address.parse::<Ipv6Addr>().ok()?.segments();
+    if segments[0] != 0x2001 || segments[1] != 0 { return None; }
+    let port = segments[5] ^ u16::MAX;
+    let ipv4_obfuscated = (u32::from(segments[6]) << 16) | u32::from(segments[7]);
+    Some((Ipv4Addr::from(ipv4_obfuscated ^ u32::MAX), port))
 }
 
 fn normalize_remote_candidate(candidate: &str) -> Option<String> {
@@ -412,12 +494,33 @@ mod tests {
         let wrapper_response =
             json!({ "exchangeResponse": json!({ "candidates": remote }).to_string() });
 
-        let candidates = extract_remote_candidates(&array_response);
+        let candidates = extract_remote_candidates(&array_response, false, None);
         assert_eq!(candidates.len(), 1);
         assert_eq!(
             candidates[0].candidate,
             "candidate:2 1 UDP 1 203.0.113.10 9002 typ host"
         );
-        assert_eq!(extract_remote_candidates(&wrapper_response).len(), 1);
+        assert_eq!(extract_remote_candidates(&wrapper_response, false, None).len(), 1);
     }
+    #[test]
+    fn recovers_xhome_ipv4_endpoint_from_teredo_without_altering_cloud() {
+        let teredo = json!([{"candidate":
+            "a=candidate:4 1 UDP 1 2001:0:4136:e378:8000:63bf:3fff:fdd2 9002 typ host",
+            "sdpMid":"0", "sdpMLineIndex":0}]);
+        let response = json!({"exchangeResponse":teredo.to_string()});
+        assert!(extract_remote_candidates(&response, false, None).is_empty());
+        let home = extract_remote_candidates(&response, true, None);
+        assert_eq!(home.len(), 2);
+        assert!(home.iter().any(|c| c.candidate.contains("192.0.2.45 9002")));
+        assert!(home.iter().any(|c| c.candidate.contains("192.0.2.45 40000")));
+        let lan = extract_remote_candidates(
+            &response, true, Some(Ipv4Addr::new(192,168,1,10)));
+        assert!(lan.iter().all(|c| c.candidate.contains("192.168.1.10")));
+    }
+    #[test]
+    fn invalid_or_non_teredo_ipv6_does_not_generate_ipv4_candidates() {
+        assert_eq!(teredo_endpoint("2603:1050:4:D3::ADB:C44F"), None);
+        assert_eq!(teredo_endpoint("bad"), None);
+    }
+
 }
