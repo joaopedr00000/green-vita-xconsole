@@ -1,5 +1,6 @@
 use crate::api::streaming::rtc::rtp;
-use crate::api::streaming::rtc::bitrate::AdaptiveBitrate;
+use crate::api::streaming::rtc::bitrate::{AdaptiveBitrate, remember_healthy_rx};
+use crate::settings::{StreamProfile, active_stream_profile};
 use crate::streaming::video::{DecodedFrame, DecoderConfig, DirectVideoOutput, VideoDecodeWorker};
 use anyhow::Result;
 use bytes::Bytes;
@@ -25,6 +26,8 @@ struct VideoStats {
     rx_payload_bytes: u64,
     nack_requests: u64,
     nack_packets: u64,
+    detected_sequence_gaps: u64,
+    recovered_or_late_packets: u64,
     last_sample_duration_us: Option<u64>,
     encoded_resolution: Option<(u32, u32)>,
 }
@@ -46,6 +49,11 @@ pub(crate) struct VideoReceiver {
     expected_video_sequence: Option<u16>,
     missing_video_packets: Vec<(u16, Instant)>,
     last_nack_report: Option<Instant>,
+    last_rtp_arrival: Option<(Instant, u32)>,
+    jitter_us: u64,
+    profile: StreamProfile,
+    last_status_damage: (u64, u64),
+    clean_status_seconds: u32,
 }
 
 impl VideoReceiver {
@@ -70,6 +78,11 @@ impl VideoReceiver {
             expected_video_sequence: None,
             missing_video_packets: Vec::new(),
             last_nack_report: None,
+            last_rtp_arrival: None,
+            jitter_us: 0,
+            profile: active_stream_profile(),
+            last_status_damage: (0, 0),
+            clean_status_seconds: 0,
         })
     }
 
@@ -85,6 +98,8 @@ impl VideoReceiver {
         self.expected_video_sequence = None;
         self.missing_video_packets.clear();
         self.last_nack_report = None;
+        self.last_rtp_arrival = None;
+        self.jitter_us = 0;
     }
 
     pub(crate) fn handles(&self, track_id: &MediaStreamTrackId) -> bool {
@@ -96,7 +111,18 @@ impl VideoReceiver {
         // Measure actual received payload, not requested encoder bitrate.
         self.stats.rx_payload_bytes = self.stats.rx_payload_bytes
             .saturating_add(packet.payload.len() as u64);
-        self.record_video_sequence(packet.header.sequence_number, Instant::now());
+        let now = Instant::now();
+        self.observe_rtp_jitter(now, packet.header.timestamp);
+        self.record_video_sequence(packet.header.sequence_number, now);
+        let jitter_ms = self.jitter_us / 1_000;
+        // Keep RTP packets in decoding order. Quality favors resilience;
+        // low-latency narrows but never disables the H264 recovery window.
+        let grace_ms = match self.profile {
+            StreamProfile::LowLatency => (16 + jitter_ms / 2).clamp(16, 24),
+            StreamProfile::Balanced => (24 + jitter_ms).clamp(24, 40),
+            StreamProfile::Quality => (32 + jitter_ms).clamp(32, 48),
+        };
+        self.rtp.set_reorder_grace_ms(grace_ms);
         self.bitrate.packet_received();
         let sample_stats = self.rtp.receive(&self.decoder, packet, keyframe_requested);
         self.stats.dropped = self
@@ -154,9 +180,25 @@ impl VideoReceiver {
         }
     }
 
+    /// RFC3550-style interarrival jitter approximation in microseconds.
+    /// RTP video uses a 90 kHz clock; no server timestamps or identities are stored.
+    fn observe_rtp_jitter(&mut self, now: Instant, timestamp: u32) {
+        if let Some((last_at, last_timestamp)) = self.last_rtp_arrival {
+            let elapsed_us = now.saturating_duration_since(last_at).as_micros() as i64;
+            let media_us = (timestamp.wrapping_sub(last_timestamp) as i32 as i64)
+                .saturating_mul(1_000_000) / 90_000;
+            let delta = elapsed_us.saturating_sub(media_us).unsigned_abs().min(250_000);
+            self.jitter_us = (self.jitter_us.saturating_mul(15) + delta) / 16;
+        }
+        self.last_rtp_arrival = Some((now, timestamp));
+    }
+
     /// Observe sequence gaps without assuming late packets are irretrievably lost.
     /// A missing packet is discarded from this list on arrival or after 180ms.
     fn record_video_sequence(&mut self, sequence: u16, now: Instant) {
+        if self.missing_video_packets.iter().any(|(seq, _)| *seq == sequence) {
+            self.stats.recovered_or_late_packets = self.stats.recovered_or_late_packets.saturating_add(1);
+        }
         self.missing_video_packets.retain(|(seq, at)| {
             *seq != sequence && now.duration_since(*at) <= NACK_EXPIRY
         });
@@ -166,6 +208,7 @@ impl VideoReceiver {
                 self.expected_video_sequence = Some(sequence.wrapping_add(1));
             } else if distance < 32768 {
                 if distance <= NACK_MAX_GAP {
+                    self.stats.detected_sequence_gaps = self.stats.detected_sequence_gaps.saturating_add(u64::from(distance));
                     for offset in 0..distance {
                         if self.missing_video_packets.len() >= NACK_MAX_PENDING {
                             break;
@@ -263,6 +306,19 @@ impl VideoReceiver {
         let rx_mbps = (self.stats.rx_payload_bytes as f64) * 8.0
             / elapsed / 1_000_000.0;
         self.stats.rx_payload_bytes = 0;
+        if self.stats.dropped == self.last_status_damage.0
+            && self.stats.decode_errors == self.last_status_damage.1
+            && self.missing_video_packets.is_empty()
+            && rx_mbps >= 2.5
+        {
+            self.clean_status_seconds = self.clean_status_seconds.saturating_add(1);
+            if self.clean_status_seconds >= 8 {
+                remember_healthy_rx((rx_mbps * 1_000_000.0) as u32);
+            }
+        } else {
+            self.clean_status_seconds = 0;
+        }
+        self.last_status_damage = (self.stats.dropped, self.stats.decode_errors);
 
         let performance = crate::streaming::video::video_performance_summary();
         let source_fps = self
@@ -277,8 +333,11 @@ impl VideoReceiver {
             .map(|(width, height)| format!("{width}x{height}"))
             .unwrap_or_else(|| "?".to_owned());
         Some(format!(
-            "enc:{encoded_resolution} srcfps:{source_fps} {performance} rx:{rx_mbps:.1}Mbps remb:{:.1}Mbps nack:{}/{} wait:{} drop:{} err:{}",
+            "enc:{encoded_resolution} srcfps:{source_fps} {performance} rx:{rx_mbps:.1}Mbps remb:{:.1}Mbps jitter:{}ms gaps:{} late:{} nack:{}/{} wait:{} drop:{} err:{}",
             self.bitrate.current_mbps(),
+            self.jitter_us / 1_000,
+            self.stats.detected_sequence_gaps,
+            self.stats.recovered_or_late_packets,
             self.stats.nack_requests,
             self.stats.nack_packets,
             u8::from(self.rtp.waiting_for_keyframe()),
