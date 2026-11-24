@@ -82,7 +82,7 @@ impl RtcWorkerProvider for XboxRtcWorkerProvider {
     }
 }
 
-pub(crate) fn spawn(
+pub(crate) fn spawn_with_config(
     stream: Stream,
     request_60fps: bool,
     video_bitrate_kbps: u32,
@@ -101,4 +101,19 @@ pub(crate) fn spawn(
         video_h264_profile,
         periodic_keyframe,
     })
+}
+
+
+/// The existing app-level backend still passes a Stream alone; preserve the
+/// xgpuconsole/web fallback and obtain requested policy from the Vita settings.
+pub(crate) fn spawn(stream: Stream) -> Result<RtcWorker> {
+    let profile = crate::settings::active_stream_profile();
+    // 60 FPS is advertised as a receiver capability. The console may choose 30 FPS.
+    spawn_with_config(
+        stream,
+        true,
+        profile.bitrate_cap() / 1000,
+        H264Profile::Baseline,
+        false,
+    )
 }

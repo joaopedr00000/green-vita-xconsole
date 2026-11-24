@@ -1,6 +1,6 @@
 use crate::app::StreamingSession;
 use crate::shell::egui_painter::SdlEguiPainter;
-use crate::streaming::video::{DirectVideoOutput, VideoTextureTarget};
+use crate::streaming::video::{DirectVideoOutput, VideoTextureTarget, NUM_TEXTURES};
 use anyhow::{Context, Result};
 use sdl2::pixels::PixelFormatEnum;
 use sdl2::render::{Canvas, Texture};
@@ -14,13 +14,13 @@ pub const HEIGHT: u32 = 544;
 
 pub struct VitaSurface {
     pub(crate) canvas: Canvas<Window>,
-    video_textures: Option<[Texture; 2]>,
+    video_textures: Option<[Texture; NUM_TEXTURES]>,
     displayed_video_texture: Option<usize>,
     direct_video_output: Option<Arc<DirectVideoOutput>>,
     video_width: u32,
     video_height: u32,
     last_frame_id: u64,
-    pending_display_timestamps: Option<(Instant, Instant)>, 
+    display_timing: Option<(Instant, u64)>,
     egui_painter: SdlEguiPainter,
 }
 
@@ -50,7 +50,7 @@ impl VitaSurface {
             video_width: 0,
             video_height: 0,
             last_frame_id: 0,
-            pending_display_timestamps: None,
+            display_timing: None,
             egui_painter: SdlEguiPainter::default(),
         })
     }
@@ -74,14 +74,23 @@ impl VitaSurface {
             return Ok(());
         }
         let index = frame.texture_index;
-        if index >= 2 {
+        if index >= NUM_TEXTURES {
             anyhow::bail!("decoder returned invalid direct texture index {index}");
         }
+        crate::streaming::video::metrics::METRICS
+            .display_pickup_us
+            .store(frame.published_at.elapsed().as_micros() as u64, Ordering::Relaxed);
+        crate::streaming::video::metrics::METRICS
+            .display_pickup_max_us
+            .fetch_max(
+                frame.published_at.elapsed().as_micros() as u64,
+                Ordering::Relaxed,
+            );
         if let Some(output) = &self.direct_video_output {
             output.mark_displayed(index, frame.generation);
         }
         self.displayed_video_texture = Some(index);
-        self.pending_display_timestamps = Some((frame.decoded_at, frame.enqueued_at));
+        self.display_timing = Some((frame.published_at, crate::streaming::video::metrics::METRICS.pipeline_age_us.load(Ordering::Relaxed)));
         crate::streaming::video::metrics::METRICS
             .presented
             .fetch_add(1, Ordering::Relaxed);
@@ -113,8 +122,17 @@ impl VitaSurface {
                 .map_err(anyhow::Error::msg)
                 .context("failed to create direct SDL BGR565 video texture")
         };
-        let mut textures = [create_texture()?, create_texture()?];
-        let mut targets = [
+        let mut textures: [_; NUM_TEXTURES] = [
+            create_texture()?,
+            create_texture()?,
+            create_texture()?,
+        ];
+        let mut targets: [_; NUM_TEXTURES] = [
+            VideoTextureTarget {
+                ptr: 0,
+                pitch: 0,
+                capacity: 0,
+            },
             VideoTextureTarget {
                 ptr: 0,
                 pitch: 0,
@@ -157,7 +175,7 @@ impl VitaSurface {
         self.video_width = 0;
         self.video_height = 0;
         self.last_frame_id = 0;
-        self.pending_display_timestamps = None;
+        self.display_timing = None;
     }
 
     pub fn draw_scene(&mut self, show_video: bool) -> Result<()> {
@@ -195,16 +213,11 @@ impl VitaSurface {
             textures_delta,
         )?;
         self.canvas.present();
-        if let Some((decoded_at, enqueued_at)) = self.pending_display_timestamps.take() {
-            let now = Instant::now();
-            crate::streaming::video::metrics::METRICS.display_queue_us.store(
-                now.saturating_duration_since(decoded_at).as_micros() as u64,
-                Ordering::Relaxed,
-            );
-            crate::streaming::video::metrics::METRICS.total_video_pipeline_us.store(
-                now.saturating_duration_since(enqueued_at).as_micros() as u64,
-                Ordering::Relaxed,
-            );
+        if let Some((published_at, pipeline_us)) = self.display_timing.take() {
+            let display_us = Instant::now().saturating_duration_since(published_at).as_micros() as u64;
+            let metrics = &crate::streaming::video::metrics::METRICS;
+            metrics.display_queue_us.store(display_us, Ordering::Relaxed);
+            metrics.total_video_pipeline_us.store(pipeline_us.saturating_add(display_us), Ordering::Relaxed);
         }
         Ok(())
     }

@@ -139,6 +139,20 @@ impl Locale {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum H264Profile {
+    #[default]
+    Baseline,
+    Main,
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DamagePolicy {
+    #[default]
+    LowLatency,
+    Balanced,
+    Quality,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -146,6 +160,9 @@ pub struct Settings {
     /// Shows internal stream/session state on the `Streaming` screen. Off by default.
     pub show_stream_debug_info: bool,
     pub stream_profile: StreamProfile,
+    pub video_h264_profile: H264Profile,
+    pub periodic_keyframe: bool,
+    pub damage_policy: DamagePolicy,
     /// Only a host returned in the signed-in account's regional allowlist is accepted.
     pub preferred_cloud_region: Option<String>,
     /// Optional private LAN IPv4 of the Xbox, for same-network Remote Play.
@@ -182,6 +199,9 @@ impl Default for Settings {
             locale: Locale::default(),
             show_stream_debug_info: false,
             stream_profile: StreamProfile::Quality,
+            video_h264_profile: H264Profile::Baseline,
+            periodic_keyframe: false,
+            damage_policy: DamagePolicy::LowLatency,
             preferred_cloud_region: None,
             home_console_lan_ip: None,
             swap_home_shoulders_and_triggers: false,

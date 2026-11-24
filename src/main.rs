@@ -1,3 +1,5 @@
+#![feature(type_alias_impl_trait)]
+
 use vita_newlib_shims as _;
 
 mod api;
@@ -7,6 +9,8 @@ mod diagnostics;
 mod i18n;
 mod input;
 mod jobs;
+#[allow(dead_code)]
+mod pipeline;
 mod safe_memory;
 mod settings;
 mod shell;
