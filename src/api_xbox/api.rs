@@ -236,10 +236,59 @@ impl ApiClient {
         is_console: bool,
         is_home: bool,
     ) -> Result<Stream> {
-        let response: StartStreamResponse = self
+        let first: Result<StartStreamResponse> = self
             .request_json(&credentials, Method::POST, path, Some(body))
-            .await?;
-        Ok(Stream::new(self.clone(), credentials, response, is_console, is_home))
+            .await;
+        match first {
+            Ok(response) => Ok(Stream::new(self.clone(), credentials, response, is_console, is_home)),
+            Err(original) => {
+                // GSSV occasionally returns HTTP 400 with "Unexpected host format or
+                // region" when the token's default/selected regional core disagrees
+                // with the requested streaming host (e.g. brs vs ASIAPACIFIC).
+                // Retry ONLY token-advertised HTTPS Xbox endpoints for the SAME
+                // offering. Never guess a hostname, copy tokens across offerings,
+                // or silently change the user's saved region preference.
+                if !is_region_routing_error(&original) {
+                    return Err(original);
+                }
+                let limit = if is_console { 2 } else { 4 };
+                let candidates = region_retry_hosts(&credentials, &original.to_string(), limit);
+                if candidates.is_empty() {
+                    return Err(original.context("xCloud region mismatch: no alternative approved endpoint in token; sign out/in to refresh regional authorization"));
+                }
+                crate::diagnostics::step("stream_region_recovery", "TOKEN_APPROVED_RETRY");
+                eprintln!("GSSV rejected selected host/region; trying {} token-approved alternatives", candidates.len());
+                for host in candidates {
+                    let mut alternative = credentials.clone();
+                    alternative.host = host;
+                    let attempt: Result<StartStreamResponse> = self
+                        .request_json(&alternative, Method::POST, path, Some(body))
+                        .await;
+                    match attempt {
+                        Ok(response) => {
+                            crate::diagnostics::step("stream_region_recovery", "ACCEPTED");
+                            eprintln!("GSSV region retry accepted host {}", alternative.host);
+                            return Ok(Stream::new(
+                                self.clone(), alternative, response, is_console, is_home
+                            ));
+                        }
+                        Err(error) if is_region_routing_error(&error) => {
+                            eprintln!("GSSV region retry rejected host {}", alternative.host);
+                        }
+                        Err(error) => {
+                            // A non-region error (authentication, capacity, title
+                            // eligibility) must never be masked as host mismatch.
+                            return Err(error.context(format!(
+                                "GSSV regional retry reached {}", alternative.host
+                            )));
+                        }
+                    }
+                }
+                Err(original.context(
+                    "GSSV rejected all token-approved regional hosts; try signing out and back in, then use the default cloud region"
+                ))
+            }
+        }
     }
 
     pub async fn get_json<T>(&self, kind: StreamKind, path: &str) -> Result<T>
@@ -272,8 +321,10 @@ impl ApiClient {
     {
         let url = format!("{}{}", credentials.host, path);
         let is_console = self.config.console_cloud.as_ref()
-            .is_some_and(|console| console.host == credentials.host
-                && console.token == credentials.token);
+            .is_some_and(|console| !console.token.is_empty()
+                && console.token == credentials.token
+                && (console.host == credentials.host
+                    || console.regions.iter().any(|region| region.host == credentials.host)));
         let mut request = self
             .client
             .request(method, url)
@@ -329,5 +380,122 @@ fn collect_session_paths(value: &Value, output: &mut Vec<String>) {
             }
         }
         _ => {}
+    }
+}
+
+
+/// Only retry the narrow, documented Xbox gateway routing error.
+/// HTTP status alone is insufficient: 400 is also returned for game eligibility
+/// and other requests, which must be surfaced unchanged.
+fn is_region_routing_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("400")
+        && (message.contains("unexpected host format or region")
+            || message.contains("unexpected host origin"))
+}
+
+/// Return approved alternate hosts from the token response, in a bounded order.
+/// Prefer a region name matching the server's core hint, then the signed default,
+/// then other valid hosts. No host is synthesized from the hint.
+fn region_retry_hosts(
+    credentials: &EndpointCredentials, error: &str, limit: usize,
+) -> Vec<String> {
+    if limit == 0 { return Vec::new(); }
+    let error_lower = error.to_ascii_lowercase();
+    let core = error_lower.split("core:").nth(1)
+        .and_then(|tail| tail.split(|c: char| !c.is_ascii_alphanumeric()).next())
+        .unwrap_or("");
+    let mut scored: Vec<(u8, String)> = Vec::new();
+    for region in &credentials.regions {
+        if !approved_region_host(&region.host) || region.host == credentials.host {
+            continue;
+        }
+        let name = region.name.to_ascii_lowercase().replace([' ', '-', '_'], "");
+        let core_match = !core.is_empty() && (
+            name.contains(core)
+            || (core == "asiapacific" && (name.contains("asia") || name.contains("pacific")))
+        );
+        scored.push((if core_match { 0 } else if region.host == credentials.default_host { 1 } else { 2 }, region.host.clone()));
+    }
+    // A default may be absent from regions but is still directly signed by
+    // the token response. Never allow arbitrary, persisted user-supplied hosts.
+    if credentials.default_host != credentials.host
+        && approved_region_host(&credentials.default_host)
+        && !scored.iter().any(|(_, host)| *host == credentials.default_host)
+    {
+        scored.push((1, credentials.default_host.clone()));
+    }
+    scored.sort_by_key(|(priority, _)| *priority);
+    let mut hosts = Vec::new();
+    for (_, host) in scored {
+        if !hosts.contains(&host) { hosts.push(host); }
+        if hosts.len() >= limit { break; }
+    }
+    hosts
+}
+
+fn approved_region_host(host: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(host) else { return false; };
+    url.scheme() == "https"
+        && url.port().is_none()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && url.path() == "/"
+        && url.host_str().is_some_and(|domain| domain.ends_with(".xboxlive.com"))
+}
+
+#[cfg(test)]
+mod region_routing_tests {
+    use super::*;
+    fn creds() -> EndpointCredentials {
+        EndpointCredentials {
+            host: "https://brs.core.gssv-play-prod.xboxlive.com".into(),
+            default_host: "https://brs.core.gssv-play-prod.xboxlive.com".into(),
+            token: "fixture-placeholder-not-real".into(),
+            regions: vec![
+                crate::api_xbox::auth::RegionEndpoint { name: "BrazilSouth".into(),
+                    host: "https://brs.core.gssv-play-prod.xboxlive.com".into() },
+                crate::api_xbox::auth::RegionEndpoint { name: "AustraliaEast".into(),
+                    host: "https://aue.core.gssv-play-prod.xboxlive.com".into() },
+                crate::api_xbox::auth::RegionEndpoint { name: "AsiaPacific".into(),
+                    host: "https://sea.core.gssv-play-prod.xboxlive.com".into() },
+                crate::api_xbox::auth::RegionEndpoint { name: "Untrusted".into(),
+                    host: "https://attack.example.org".into() },
+            ],
+        }
+    }
+
+    #[test]
+    fn mismatch_triggers_recovery_only_for_specific_error() {
+        assert!(is_region_routing_error(&anyhow::anyhow!(
+            "xCloud request failed with 400 Bad Request: Unexpected host format or region: brs, core: ASIAPACIFIC"
+        )));
+        assert!(!is_region_routing_error(&anyhow::anyhow!(
+            "xCloud request failed with 400 Bad Request: OfferingDoesNotContainTitle"
+        )));
+        assert!(!is_region_routing_error(&anyhow::anyhow!(
+            "xCloud request failed with 401 Unauthorized: Unexpected host format or region"
+        )));
+    }
+
+    #[test]
+    fn tries_core_matching_token_region_first_and_never_external_host() {
+        let alternate = region_retry_hosts(&creds(),
+            "Unexpected host format or region: brs, core: ASIAPACIFIC", 4);
+        assert_eq!(alternate, vec![
+            "https://sea.core.gssv-play-prod.xboxlive.com",
+            "https://aue.core.gssv-play-prod.xboxlive.com",
+        ]);
+        assert!(region_retry_hosts(&creds(), "core: ASIAPACIFIC", 1).len() == 1);
+    }
+
+    #[test]
+    fn reject_redirect_unsafe_hosts_and_non_https_origins() {
+        assert!(!approved_region_host("https://xboxlive.com.evil.example/"));
+        assert!(!approved_region_host("http://brs.core.gssv-play-prod.xboxlive.com"));
+        assert!(!approved_region_host("https://brs.core.gssv-play-prod.xboxlive.com:8443"));
+        assert!(!approved_region_host("https://brs.core.gssv-play-prod.xboxlive.com/x?token=x"));
     }
 }
