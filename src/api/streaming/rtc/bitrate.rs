@@ -1,10 +1,19 @@
 //! Conservative 720p-only receiver bitrate feedback.
 //! Feedback is a request to the server, not evidence that Xbox changed its encoder.
 use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU32, Ordering};
+use crate::settings::{StreamProfile, active_stream_profile};
 
 const MIN_BPS: u32 = 2_500_000;
 const MAX_BPS: u32 = 15_000_000;
 const START_BPS: u32 = 6_000_000;
+// Only aggregate bitrate from a healthy stream is retained in process memory.
+static LAST_HEALTHY_RX_BPS: AtomicU32 = AtomicU32::new(0);
+pub(crate) fn remember_healthy_rx(bps: u32) {
+    if (2_500_000..=16_000_000).contains(&bps) {
+        LAST_HEALTHY_RX_BPS.store(bps, Ordering::Relaxed);
+    }
+}
 const WINDOW: Duration = Duration::from_secs(3);
 const FEEDBACK_INTERVAL: Duration = Duration::from_secs(5);
 const CLEAN_INCREASE_INTERVAL: Duration = Duration::from_secs(20);
@@ -12,6 +21,7 @@ const CLEAN_INCREASE_STEP_BPS: u32 = 1_000_000;
 
 pub(crate) struct AdaptiveBitrate {
     target_bps: u32,
+    profile: StreamProfile,
     window_started: Instant,
     last_increase: Instant,
     last_feedback: Option<Instant>,
@@ -21,9 +31,20 @@ pub(crate) struct AdaptiveBitrate {
 
 impl AdaptiveBitrate {
     pub(crate) fn new() -> Self {
+        Self::with_profile(active_stream_profile())
+    }
+
+    fn with_profile(profile: StreamProfile) -> Self {
         let now = Instant::now();
+        let measured = LAST_HEALTHY_RX_BPS.load(Ordering::Relaxed);
+        let initial = if measured > 0 {
+            measured.saturating_add(500_000).max(profile.starting_bitrate())
+        } else {
+            profile.starting_bitrate()
+        };
         Self {
-            target_bps: START_BPS,
+            target_bps: initial.clamp(MIN_BPS, profile.bitrate_cap()),
+            profile,
             window_started: now,
             last_increase: now,
             last_feedback: None,
@@ -57,7 +78,7 @@ impl AdaptiveBitrate {
                 self.last_increase = now;
             } else if self.damaged_frames == 0
                 && now.duration_since(self.last_increase) >= CLEAN_INCREASE_INTERVAL {
-                let increased = self.target_bps.saturating_add(CLEAN_INCREASE_STEP_BPS).min(MAX_BPS);
+                let increased = self.target_bps.saturating_add(CLEAN_INCREASE_STEP_BPS).min(self.profile.bitrate_cap());
                 changed = increased != self.target_bps;
                 self.target_bps = increased;
                 self.last_increase = now;
@@ -102,7 +123,7 @@ mod tests {
     #[test]
     fn reaches_15mbps_without_ever_exceeding_it_on_clean_stream() {
         let start = Instant::now();
-        let mut control = AdaptiveBitrate::new();
+        let mut control = AdaptiveBitrate::with_profile(StreamProfile::Quality);
         for i in 0..=100 {
             control.packet_received();
             let now = start + Duration::from_secs(i * 3);
