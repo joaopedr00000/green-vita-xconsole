@@ -27,7 +27,7 @@ You need a homebrew-enabled PS Vita with VitaShell and an Xbox account that has
 access to Xbox Cloud Gaming.
 
 1. Download `green-vita.vpk` from the
-   [adaptive streaming v0.3.0 beta release](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.3.0-beta.1).
+   [GreenVita v0.3.1 stable release](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.3.1).
    For the earlier stable experiment, use the [v0.2.0 beta](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.2.0-beta.1).
 2. Transfer the VPK to the Vita.
 3. Install it with VitaShell.
