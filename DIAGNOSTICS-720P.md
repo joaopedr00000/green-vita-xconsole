@@ -71,3 +71,13 @@ redacted diagnostic text in a bug report.
 The PS4 projects XCloud4, Nexo X4 and PSBox are protocol references, not
 drop-in media decoders for PS Vita. This build makes no claim of copying
 their GPL source into GreenVita's MPL-2.0 codebase.
+
+## Experimental v0.3.0 streaming telemetry
+- `jitter:Nms`: receiver-side smoothed RTP interarrival variation, not network round-trip latency.
+- `gaps:N`: missing sequence references detected, not permanent packet loss.
+- `late:N`: packets seen after a gap, not proof a retransmission was used.
+- `displayq:Nus`: decoded frame age through local SDL present return; may include scheduler and VSync time.
+- `pipe:Nus`: compressed access-unit queue to SDL present return, not the server's video pipeline.
+- `audio:Nms`, `au:N/N`: adaptive audio start target, underruns and skipped PCM due to backlog.
+- Selected Quality profile defaults to 15 Mbps requested maximum; Balanced requests at most 10 Mbps, Low Latency 6 Mbps. Changes apply on next stream.
+- Authorized region selection is for **future** sessions. HTTPS HEAD timing does not estimate cloud gaming RTT.
