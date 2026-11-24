@@ -102,6 +102,21 @@ impl App {
         true
     }
 
+    /// Manual in-game restart. Preserves game/console selection and reuses the
+    /// normal clean session startup; does not retry indefinitely on its own.
+    pub(in crate::app) async fn restart_stream(&mut self) {
+        let Some(target) = self.state.streaming().map(|session| session.restart_target()) else {
+            return;
+        };
+        let previous = std::mem::replace(&mut self.state, AppState::ModeSelect { selected: 0 });
+        if let Some(streaming) = previous.into_streaming() {
+            if let Err(error) = streaming.stop().await {
+                crate::diagnostics::failure("manual_restart_cleanup", &format!("{error:#}"));
+            }
+        }
+        self.start_stream_for_target(target);
+    }
+
     pub(in crate::app) async fn exit_stream(&mut self) {
         let state = std::mem::replace(&mut self.state, AppState::ModeSelect { selected: 0 });
         let return_target = if let Some(streaming) = state.into_streaming() {
