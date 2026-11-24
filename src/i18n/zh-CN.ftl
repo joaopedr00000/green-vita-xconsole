@@ -25,7 +25,7 @@ settings-stream-debug-info = 显示串流调试信息
 action-back = 返回
 
 mode-select-cloud-subtitle = 通过 Xbox Cloud Gaming 畅玩
-mode-select-home-subtitle = 尚未实现 — 暂时请使用 xVita
+mode-select-home-subtitle = 从自己的 Xbox 主机串流（实验）
 
 paused-resume = 返回游戏
 paused-xbox-button = Xbox 按钮
@@ -86,3 +86,9 @@ settings-profile-balanced = 均衡（最高 10 Mbps）
 settings-profile-quality = 高画质（最高 15 Mbps）
 paused-restart-stream = 重新连接串流
 update-available = 有新版本：{ $version }
+
+settings-xhome-heading = Xbox 远程游玩 (xHome)
+settings-xhome-ip = Xbox 局域网 IPv4
+settings-xhome-ip-hint = 可选：同一网络的 Xbox 私有 IP。留空则自动连接。
+settings-xhome-ip-invalid = 请输入私有 IPv4（例如 192.168.1.20）
+settings-xhome-shoulder-swap = 远程游玩时交换 L1/L2 和 R1/R2

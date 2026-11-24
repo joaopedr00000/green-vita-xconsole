@@ -25,7 +25,7 @@ settings-stream-debug-info = ストリーミングのデバッグ情報を表示
 action-back = 戻る
 
 mode-select-cloud-subtitle = Xbox Cloud Gaming でゲームをプレイ
-mode-select-home-subtitle = 未実装です。当面は xVita を使用してください
+mode-select-home-subtitle = 自分の Xbox からストリーミング (試験的)
 
 paused-resume = ゲームに戻る
 paused-xbox-button = Xbox ボタン
@@ -86,3 +86,9 @@ settings-profile-balanced = バランス (最大 10 Mbps)
 settings-profile-quality = 画質優先 (最大 15 Mbps)
 paused-restart-stream = ストリーム再起動
 update-available = 新しいバージョンがあります: { $version }
+
+settings-xhome-heading = Xbox リモートプレイ (xHome)
+settings-xhome-ip = Xbox の LAN IPv4
+settings-xhome-ip-hint = 任意: 同じネットワークの Xbox のプライベート IP。空欄で自動接続。
+settings-xhome-ip-invalid = プライベート IPv4 を入力 (例: 192.168.1.20)
+settings-xhome-shoulder-swap = リモートプレイで L1/L2 と R1/R2 を入れ替え

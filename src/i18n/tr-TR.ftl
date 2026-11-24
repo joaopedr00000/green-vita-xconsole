@@ -25,7 +25,7 @@ settings-stream-debug-info = Akış hata ayıklama bilgilerini göster
 action-back = Geri
 
 mode-select-cloud-subtitle = Xbox Cloud Gaming ile oyun oyna
-mode-select-home-subtitle = Henüz uygulanmadı — şimdilik xVita kullanın
+mode-select-home-subtitle = Kendi Xbox konsolundan yayın (deneysel)
 
 paused-resume = Oyuna dön
 paused-xbox-button = Xbox düğmesi
@@ -86,3 +86,9 @@ settings-profile-balanced = Dengeli (en fazla 10 Mbps)
 settings-profile-quality = Kalite (en fazla 15 Mbps)
 paused-restart-stream = Akışı yeniden başlat
 update-available = Yeni sürüm mevcut: { $version }
+
+settings-xhome-heading = Xbox Uzaktan Oynatma (xHome)
+settings-xhome-ip = Xbox yerel IPv4
+settings-xhome-ip-hint = İsteğe bağlı: aynı ağdaki özel Xbox IP. Otomatik bağlantı için boş bırakın.
+settings-xhome-ip-invalid = Özel IPv4 girin (ör. 192.168.1.20).
+settings-xhome-shoulder-swap = Uzaktan oynamada L1/L2 ve R1/R2 tuşlarını değiştir

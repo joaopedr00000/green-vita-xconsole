@@ -25,7 +25,7 @@ settings-stream-debug-info = Показывать отладочную инфо�
 action-back = Назад
 
 mode-select-cloud-subtitle = Игры через Xbox Cloud Gaming
-mode-select-home-subtitle = Ещё не реализовано — пока используйте xVita
+mode-select-home-subtitle = Трансляция с собственной Xbox (эксперимент)
 
 paused-resume = Вернуться в игру
 paused-xbox-button = Кнопка Xbox
@@ -86,3 +86,9 @@ settings-profile-balanced = Баланс (до 10 Мбит/с)
 settings-profile-quality = Качество (до 15 Мбит/с)
 paused-restart-stream = Перезапустить трансляцию
 update-available = Доступна новая версия: { $version }
+
+settings-xhome-heading = Удалённая игра Xbox (xHome)
+settings-xhome-ip = Локальный IPv4 Xbox
+settings-xhome-ip-hint = Необязательно: частный IP Xbox в одной сети. Пусто — автоматический маршрут.
+settings-xhome-ip-invalid = Укажите частный IPv4 (например, 192.168.1.20).
+settings-xhome-shoulder-swap = Поменять L1/L2 и R1/R2 в удалённой игре

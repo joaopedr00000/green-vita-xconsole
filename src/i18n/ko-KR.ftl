@@ -25,7 +25,7 @@ settings-stream-debug-info = 스트리밍 디버그 정보 표시
 action-back = 뒤로
 
 mode-select-cloud-subtitle = Xbox 클라우드 게이밍으로 플레이
-mode-select-home-subtitle = 아직 구현되지 않았습니다. 당분간 xVita를 사용하세요
+mode-select-home-subtitle = 내 Xbox에서 스트리밍 (실험적)
 
 paused-resume = 게임으로 돌아가기
 paused-xbox-button = Xbox 버튼
@@ -86,3 +86,9 @@ settings-profile-balanced = 균형 (최대 10 Mbps)
 settings-profile-quality = 화질 우선 (최대 15 Mbps)
 paused-restart-stream = 스트림 다시 시작
 update-available = 새 버전 사용 가능: { $version }
+
+settings-xhome-heading = Xbox 원격 플레이 (xHome)
+settings-xhome-ip = Xbox LAN IPv4
+settings-xhome-ip-hint = 선택 사항: 같은 네트워크의 Xbox 사설 IP. 비우면 자동 연결.
+settings-xhome-ip-invalid = 사설 IPv4 입력 (예: 192.168.1.20)
+settings-xhome-shoulder-swap = 원격 플레이에서 L1/L2 및 R1/R2 바꾸기

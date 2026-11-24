@@ -25,7 +25,7 @@ settings-stream-debug-info = إظهار معلومات تصحيح أخطاء ا�
 action-back = رجوع
 
 mode-select-cloud-subtitle = ألعاب عبر Xbox Cloud Gaming
-mode-select-home-subtitle = غير منفذ بعد — استخدم xVita في الوقت الحالي
+mode-select-home-subtitle = البث من جهاز Xbox الخاص بك (تجريبي)
 
 paused-resume = العودة إلى اللعبة
 paused-xbox-button = زر Xbox
@@ -86,3 +86,9 @@ settings-profile-balanced = متوازن (حتى 10 Mbps)
 settings-profile-quality = جودة عالية (حتى 15 Mbps)
 paused-restart-stream = إعادة تشغيل البث
 update-available = إصدار جديد متاح: { $version }
+
+settings-xhome-heading = اللعب عن بعد من Xbox (xHome)
+settings-xhome-ip = عنوان Xbox المحلي IPv4
+settings-xhome-ip-hint = اختياري: عنوان خاص لـ Xbox على الشبكة نفسها. اتركه فارغًا للاتصال التلقائي.
+settings-xhome-ip-invalid = أدخل عنوان IPv4 خاصًا (مثل 192.168.1.20).
+settings-xhome-shoulder-swap = تبديل L1/L2 و R1/R2 في اللعب عن بعد

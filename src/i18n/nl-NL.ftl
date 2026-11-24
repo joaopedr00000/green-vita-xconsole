@@ -25,7 +25,7 @@ settings-stream-debug-info = Streaming-foutopsporingsinfo weergeven
 action-back = Terug
 
 mode-select-cloud-subtitle = Games via Xbox Cloud Gaming
-mode-select-home-subtitle = Nog niet geïmplementeerd — gebruik voorlopig xVita
+mode-select-home-subtitle = Stream vanaf je eigen Xbox (experimenteel)
 
 paused-resume = Terug naar het spel
 paused-xbox-button = Xbox-knop
@@ -86,3 +86,9 @@ settings-profile-balanced = Gebalanceerd (max. 10 Mbps)
 settings-profile-quality = Kwaliteit (max. 15 Mbps)
 paused-restart-stream = Stream opnieuw starten
 update-available = Nieuwe versie beschikbaar: { $version }
+
+settings-xhome-heading = Xbox Remote Play (xHome)
+settings-xhome-ip = Xbox LAN IPv4
+settings-xhome-ip-hint = Optioneel: privé-IP van Xbox op hetzelfde netwerk. Leeg voor automatisch.
+settings-xhome-ip-invalid = Voer een privé-IPv4 in (bijv. 192.168.1.20).
+settings-xhome-shoulder-swap = Wissel L1/L2 en R1/R2 bij Remote Play

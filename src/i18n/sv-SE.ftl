@@ -25,7 +25,7 @@ settings-stream-debug-info = Visa felsökningsinfo för strömning
 action-back = Tillbaka
 
 mode-select-cloud-subtitle = Spel via Xbox Cloud Gaming
-mode-select-home-subtitle = Inte implementerat ännu — använd xVita så länge
+mode-select-home-subtitle = Strömma från din egen Xbox (experimentellt)
 
 paused-resume = Tillbaka till spelet
 paused-xbox-button = Xbox-knapp
@@ -86,3 +86,9 @@ settings-profile-balanced = Balanserat (max 10 Mbps)
 settings-profile-quality = Kvalitet (max 15 Mbps)
 paused-restart-stream = Starta om strömmen
 update-available = Ny version tillgänglig: { $version }
+
+settings-xhome-heading = Xbox fjärrspel (xHome)
+settings-xhome-ip = Xbox LAN IPv4
+settings-xhome-ip-hint = Valfritt: privat Xbox-IP på samma nätverk. Tomt för automatisk väg.
+settings-xhome-ip-invalid = Ange privat IPv4 (t.ex. 192.168.1.20).
+settings-xhome-shoulder-swap = Byt L1/L2 och R1/R2 vid fjärrspel
