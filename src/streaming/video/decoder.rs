@@ -78,7 +78,7 @@ impl Drop for AvcdecDecoder {
     }
 }
 
-pub struct HwVideoDecoder {
+pub struct PublicDecoder {
     decoder: AvcdecDecoder,
     _frame_memory: CdramBlock,
     _library: AvcdecLibrary,
@@ -86,7 +86,7 @@ pub struct HwVideoDecoder {
     height: u32,
 }
 
-impl HwVideoDecoder {
+impl PublicDecoder {
     pub fn new(config: DecoderConfig) -> Result<Self> {
         unsafe {
             let library = AvcdecLibrary::initialize(config.decode_width, config.decode_height)?;
@@ -228,4 +228,65 @@ impl HwVideoDecoder {
 
 // SAFETY: the CDRAM blocks and decoder handle have no thread affinity in the underlying SCE API -
 // this is only ever moved once (into `VideoDecodeWorker`'s thread), never accessed concurrently.
-unsafe impl Send for HwVideoDecoder {}
+unsafe impl Send for PublicDecoder {}
+
+
+// Both backends use identical BGR565 targets. Internal pictures are associated
+// with the ORIGINAL access unit's timestamps, never the most recent submission.
+use std::time::Instant;
+use std::collections::VecDeque;
+use crate::streaming::hud::DecodeStages;
+use super::decoder_internal;
+#[derive(Clone,Copy)]
+pub(super) struct FrameTiming{pub enqueued:Instant,pub stages:DecodeStages,pub generation:u64}
+enum Backend{Public(PublicDecoder),Internal(decoder_internal::HwVideoDecoder)}
+pub struct HwVideoDecoder{backend:Backend,pending:VecDeque<(u64,FrameTiming)>,no_output:u8}
+impl HwVideoDecoder{
+    pub fn new(config:DecoderConfig)->Result<Self>{
+        if crate::experimental::internal_enabled(){
+            match decoder_internal::HwVideoDecoder::new(config){
+                Ok(decoder)=>{crate::diagnostics::step("lab_decoder","INTERNAL_LOW_DELAY");crate::experimental::record_decoder(true);return Ok(Self{backend:Backend::Internal(decoder),pending:VecDeque::with_capacity(24),no_output:0});}
+                Err(error)=>{crate::diagnostics::failure("lab_decoder",&format!("{error:#}"));crate::experimental::disable_internal();}
+            }
+        }
+        crate::diagnostics::step("lab_decoder","PUBLIC");
+        crate::experimental::record_decoder(false);
+        Ok(Self{backend:Backend::Public(PublicDecoder::new(config)?),pending:VecDeque::new(),no_output:0})
+    }
+    pub fn is_internal(&self)->bool{matches!(self.backend,Backend::Internal(_))}
+    pub fn decode(&mut self,data:&[u8],target:VideoTextureTarget,mut timing:FrameTiming)->Result<Option<FrameTiming>>{
+        let started=Instant::now();
+        match &mut self.backend{
+            Backend::Public(decoder)=>{
+                let ready=decoder.decode(data,target)?;
+                timing.stages.decode_us=started.elapsed().as_micros() as u64;
+                Ok(ready.then_some(timing))
+            }
+            Backend::Internal(decoder)=>{
+                decoder.submit_access_unit(data)?;
+                let pts=decoder.submitted_sequence().saturating_mul(super::AU_PTS_STEP);
+                timing.stages.decode_us=started.elapsed().as_micros() as u64;
+                if self.pending.len()>=24{self.pending.pop_front();}
+                self.pending.push_back((pts,timing));
+                let get_started=Instant::now();
+                let returned=decoder.get_picture(target,super::VideoPixelFormat::Bgr565)?;
+                let Some(pts)=returned else{
+                    self.no_output=self.no_output.saturating_add(1);
+                    if self.no_output>=24{bail!("internal AVCDEC: 24 consecutive submissions without output");}
+                    return Ok(None);
+                };
+                let Some(i)=self.pending.iter().position(|(id,_)|*id==pts) else{
+                    self.no_output=self.no_output.saturating_add(1);
+                    if self.no_output>=24{bail!("internal AVCDEC: unmatched picture timestamps");}
+                    return Ok(None);
+                };
+                let Some((_,mut original))=self.pending.remove(i)else{return Ok(None);};
+                // Do not publish images older than a picture already selected.
+                self.pending.retain(|(id,_)|*id>pts);
+                self.no_output=0;
+                original.stages.decode_us=original.stages.decode_us.saturating_add(get_started.elapsed().as_micros() as u64);
+                Ok(Some(original))
+            }
+        }
+    }
+}

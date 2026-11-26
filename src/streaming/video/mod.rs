@@ -1,4 +1,9 @@
 mod decoder;
+mod decoder_internal;
+pub const AVCDEC_NUM_REF_FRAMES:u32=1;
+pub const AU_PTS_STEP:u64=1500;
+#[derive(Clone,Copy,PartialEq,Eq,Debug)]
+pub enum VideoPixelFormat{Bgr565,Iyuv,Rgba8888,Nv12}
 mod memory;
 pub(crate) mod metrics;
 mod worker;

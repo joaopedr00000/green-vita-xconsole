@@ -27,3 +27,8 @@ fn apply(clocks:[i32;4]){
     for (v,set) in clocks.into_iter().zip([scePowerSetArmClockFrequency,scePowerSetBusClockFrequency,scePowerSetGpuClockFrequency,scePowerSetGpuXbarClockFrequency] as [unsafe extern "C" fn(i32)->i32;4]){if v>0{let r=unsafe{set(v)};if r<0{crate::diagnostics::step("lab_clocks","SET_FAILED");}}}
 }
 impl Drop for PerformanceMode{fn drop(&mut self){#[cfg(target_os="vita")]apply(self.old);}}
+
+static ACTIVE_INTERNAL:AtomicBool=AtomicBool::new(false);
+pub(crate) fn disable_internal(){INTERNAL.store(false,Ordering::Relaxed);crate::diagnostics::step("lab_decoder","PUBLIC_FALLBACK");}
+pub(crate) fn record_decoder(internal:bool){ACTIVE_INTERNAL.store(internal,Ordering::Relaxed);}
+pub(crate) fn active_internal()->bool{ACTIVE_INTERNAL.load(Ordering::Relaxed)}

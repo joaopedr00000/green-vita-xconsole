@@ -1,0 +1,3 @@
+# Experimental OpenNOW-vita integration
+
+The internal AVCDEC backend in src/streaming/video/decoder_internal.rs, aligned CDRAM allocation changes, build.rs and vita-stubs/SceVideodecLowDelayUser.S are adapted from [OpenCloudGaming/OpenNOW-vita at f133d2556b7ba2e09880eb534dc5a24306cef987](https://github.com/OpenCloudGaming/OpenNOW-vita/tree/f133d2556b7ba2e09880eb534dc5a24306cef987) (MPL-2.0), itself incorporating Day-OS/green-vita and referring to turbo-green-vita / vita-moonlight for the corrected low-delay import stub. Modified files remain under MPL-2.0; original repository and license are linked. The triple-texture, independent audio, scheduling, watchdog and link-estimation concepts are adapted to GreenVita, not NVIDIA-specific signaling.
