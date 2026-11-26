@@ -297,7 +297,7 @@ impl VideoReceiver {
         }
     }
 
-    pub(crate) fn status(&mut self, now: Instant) -> Option<String> {
+    pub(crate) fn status(&mut self, now: Instant) -> Option<(String,crate::streaming::hud::StreamHud)> {
         if now.duration_since(self.last_stats_report) < STREAM_STATS_INTERVAL {
             return None;
         }
@@ -322,7 +322,8 @@ impl VideoReceiver {
 
         // Observation only; keep the v0.3.1 receive/decode decisions unchanged.
         crate::diagnostics::metrics((rx_mbps * 1000.0) as u64, self.jitter_us, self.stats.detected_sequence_gaps, self.stats.recovered_or_late_packets, self.stats.dropped, self.stats.decode_errors, (self.bitrate.current_mbps() * 1000.0) as u64, self.rtp.waiting_for_keyframe());
-        let performance = crate::streaming::video::video_performance_summary();
+        let playback = crate::streaming::video::metrics::snapshot();
+        let performance = crate::streaming::video::metrics::summary(&playback);
         let source_fps = self
             .stats
             .last_sample_duration_us
@@ -334,7 +335,8 @@ impl VideoReceiver {
             .encoded_resolution
             .map(|(width, height)| format!("{width}x{height}"))
             .unwrap_or_else(|| "?".to_owned());
-        Some(format!(
+        let hud=crate::streaming::hud::StreamHud {at:now,elapsed,server:None,encoded:self.stats.encoded_resolution,source_fps:self.stats.last_sample_duration_us.filter(|v|*v>0).map(|v|1_000_000.0/v as f64),playback,rx_bps:0,tx_bps:0,rx_total:0,tx_total:0,rx_packets:0,tx_packets:0,socket_errors:0,video_bps:(rx_mbps*1_000_000.0) as u64,requested_bps:(self.bitrate.current_mbps()*1_000_000.0) as u64,jitter_us:self.jitter_us,gaps:self.stats.detected_sequence_gaps,late:self.stats.recovered_or_late_packets,nacks:self.stats.nack_requests,nack_packets:self.stats.nack_packets,waiting:self.rtp.waiting_for_keyframe(),dropped:self.stats.dropped,errors:self.stats.decode_errors};
+        Some((format!(
             "enc:{encoded_resolution} srcfps:{source_fps} {performance} rx:{rx_mbps:.1}Mbps remb:{:.1}Mbps jitter:{}ms gaps:{} late:{} nack:{}/{} wait:{} drop:{} err:{}",
             self.bitrate.current_mbps(),
             self.jitter_us / 1_000,
@@ -345,7 +347,7 @@ impl VideoReceiver {
             u8::from(self.rtp.waiting_for_keyframe()),
             self.stats.dropped,
             self.stats.decode_errors,
-        ))
+        ),hud))
     }
 }
 

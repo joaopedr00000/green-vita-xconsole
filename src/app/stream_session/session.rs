@@ -18,6 +18,7 @@ pub(super) enum StreamReturnTarget {
 pub(crate) struct StreamingSession {
     pub(crate) paused: bool,
     pub(crate) status: String,
+    pub(crate) hud:Option<crate::streaming::hud::StreamHud>,
     pub(crate) hint_started_at: Instant,
     pub(in crate::app) pause_selected: usize,
     pub(in crate::app) title_id: Option<String>,
@@ -52,6 +53,7 @@ impl StreamingSession {
         Ok(Self {
             paused: false,
             status: "Starting streaming backend".to_owned(),
+            hud:None,
             hint_started_at: Instant::now(),
             pause_selected: 0,
             title_id,
@@ -210,6 +212,7 @@ impl StreamingSession {
         for event in events {
             match event {
                 PlaybackBackendEvent::Status(status) => self.status = status,
+                PlaybackBackendEvent::Hud(hud)=>self.hud=Some(hud),
                 PlaybackBackendEvent::VideoResolution(width, height) => {
                     crate::diagnostics::video_resolution(width, height);
                     self.stream_video_size = Some((width, height));

@@ -145,6 +145,9 @@ pub struct Settings {
     pub locale: Locale,
     /// Shows internal stream/session state on the `Streaming` screen. Off by default.
     pub show_stream_debug_info: bool,
+    /// 0 summary, 1 network, 2 video/audio, 3 controls, 4 overview.
+    pub hud_page:u8,
+    pub hud_opacity:u8,
     pub stream_profile: StreamProfile,
     /// Only a host returned in the signed-in account's regional allowlist is accepted.
     pub preferred_cloud_region: Option<String>,
@@ -180,6 +183,7 @@ impl Default for Settings {
         Self {
             locale: Locale::default(),
             show_stream_debug_info: false,
+            hud_page:0,hud_opacity:85,
             stream_profile: StreamProfile::Quality,
             preferred_cloud_region: None,
             game_profiles: HashMap::new(),

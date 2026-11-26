@@ -43,27 +43,22 @@ pub(crate) static METRICS: VideoMetrics = VideoMetrics {
     resets: AtomicU64::new(0),
 };
 
-pub fn video_performance_summary() -> String {
-    let rtp_sum = METRICS.rtp_assembly_sum_us.swap(0, Ordering::Relaxed);
-    let rtp_count = METRICS.rtp_assembly_count.swap(0, Ordering::Relaxed);
-    let rtp_average = rtp_sum.checked_div(rtp_count).unwrap_or(0);
-    let rtp_max = METRICS.rtp_assembly_max_us.swap(0, Ordering::Relaxed);
-    format!(
-        "fps d/p:{}/{} us r:{rtp_average}/{rtp_max} d/a:{}/{} inputq:{}us displayq:{}us pipe:{}us audio:{}ms au:{}/{} skip:{} repl:{} q:{} rs:{} rst:{}",
-        METRICS.decoded.swap(0, Ordering::Relaxed),
-        METRICS.presented.swap(0, Ordering::Relaxed),
-        METRICS.decode_us.load(Ordering::Relaxed),
-        METRICS.pipeline_age_us.load(Ordering::Relaxed),
-        METRICS.input_dispatch_us.load(Ordering::Relaxed),
-        METRICS.display_queue_us.load(Ordering::Relaxed),
-        METRICS.total_video_pipeline_us.load(Ordering::Relaxed),
-        METRICS.audio_target_ms.load(Ordering::Relaxed),
-        METRICS.audio_underruns.load(Ordering::Relaxed),
-        METRICS.audio_drops.load(Ordering::Relaxed),
-        METRICS.skipped.swap(0, Ordering::Relaxed),
-        METRICS.replaced.swap(0, Ordering::Relaxed),
-        METRICS.queue_full.swap(0, Ordering::Relaxed),
-        METRICS.resyncs.load(Ordering::Relaxed),
-        METRICS.resets.load(Ordering::Relaxed),
-    )
+pub(crate) fn snapshot() -> crate::streaming::hud::PlaybackMetrics {
+    use crate::streaming::hud::PlaybackMetrics;
+    let sum=METRICS.rtp_assembly_sum_us.swap(0,Ordering::Relaxed);
+    let count=METRICS.rtp_assembly_count.swap(0,Ordering::Relaxed);
+    PlaybackMetrics {
+        rtp_avg_us:sum.checked_div(count).unwrap_or(0),rtp_max_us:METRICS.rtp_assembly_max_us.swap(0,Ordering::Relaxed),
+        decoded:METRICS.decoded.swap(0,Ordering::Relaxed),presented:METRICS.presented.swap(0,Ordering::Relaxed),
+        decode_us:METRICS.decode_us.load(Ordering::Relaxed),queue_age_us:METRICS.pipeline_age_us.load(Ordering::Relaxed),
+        input_us:METRICS.input_dispatch_us.load(Ordering::Relaxed),display_us:METRICS.display_queue_us.load(Ordering::Relaxed),
+        pipeline_us:METRICS.total_video_pipeline_us.load(Ordering::Relaxed),audio_ms:METRICS.audio_target_ms.load(Ordering::Relaxed),
+        underruns:METRICS.audio_underruns.load(Ordering::Relaxed),audio_drops:METRICS.audio_drops.load(Ordering::Relaxed),
+        skipped:METRICS.skipped.swap(0,Ordering::Relaxed),replaced:METRICS.replaced.swap(0,Ordering::Relaxed),
+        queue_full:METRICS.queue_full.swap(0,Ordering::Relaxed),resyncs:METRICS.resyncs.load(Ordering::Relaxed),resets:METRICS.resets.load(Ordering::Relaxed),
+    }
+}
+pub fn video_performance_summary() -> String { summary(&snapshot()) }
+pub(crate) fn summary(m:&crate::streaming::hud::PlaybackMetrics)->String {
+    format!("fps d/p:{}/{} us r:{}/{} d/a:{}/{} inputq:{}us displayq:{}us pipe:{}us audio:{}ms au:{}/{} skip:{} repl:{} q:{} rs:{} rst:{}",m.decoded,m.presented,m.rtp_avg_us,m.rtp_max_us,m.decode_us,m.queue_age_us,m.input_us,m.display_us,m.pipeline_us,m.audio_ms,m.underruns,m.audio_drops,m.skipped,m.replaced,m.queue_full,m.resyncs,m.resets)
 }

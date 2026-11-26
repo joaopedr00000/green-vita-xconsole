@@ -52,6 +52,7 @@ impl XboxStreamingBackend {
                 RtcWorkerEvent::Status { status } => {
                     return Some(PlaybackBackendEvent::Status(status));
                 }
+                RtcWorkerEvent::Hud(hud)=>return Some(PlaybackBackendEvent::Hud(hud)),
                 RtcWorkerEvent::VideoResolution(width, height) => {
                     return Some(PlaybackBackendEvent::VideoResolution(width, height));
                 }

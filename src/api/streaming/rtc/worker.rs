@@ -34,6 +34,7 @@ pub(crate) trait RtcWorkerProvider: Send + 'static {
 pub enum RtcWorkerEvent {
     LocalCandidates(Vec<RTCIceCandidateInit>),
     Status { status: String },
+    Hud(crate::streaming::hud::StreamHud),
     VideoResolution(u32, u32),
     Closed,
     Error(String),
@@ -393,6 +394,7 @@ async fn run_session<B: super::session::RtcSessionBackend>(
             *latest = Some(frame);
         }
 
+        if let Some(hud)=session.hud.take(){send_lossy(&events_tx,RtcWorkerEvent::Hud(hud));}
         if session.status != last_status || session.connection_state != last_connection_state {
             last_status = session.status.clone();
             last_connection_state = session.connection_state;

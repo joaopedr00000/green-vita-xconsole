@@ -56,6 +56,8 @@ pub(crate) struct RtcSession<B: RtcSessionBackend> {
     initial_video_watchdog_started_at: Option<Instant>,
     last_initial_video_keyframe_request: Option<Instant>,
     pub status: String,
+    pub(crate) hud:Option<crate::streaming::hud::StreamHud>,
+    last_network_counters:(u64,u64),
 }
 
 impl<B: RtcSessionBackend> RtcSession<B> {
@@ -80,6 +82,7 @@ impl<B: RtcSessionBackend> RtcSession<B> {
             initial_video_watchdog_started_at: None,
             last_initial_video_keyframe_request: None,
             status: "Negotiating WebRTC connection".to_owned(),
+            hud:None,last_network_counters:(0,0),
         })
     }
 
@@ -136,7 +139,14 @@ impl<B: RtcSessionBackend> RtcSession<B> {
             self.video.request_nack(&mut self.peer, now);
             self.video.adapt_bitrate(&mut self.peer, now);
         }
-        if let Some(status) = self.video.status(now) {
+        if let Some((status,mut hud)) = self.video.status(now) {
+            let (rx,tx,rp,tp,errors)=self.transport.counters();
+            hud.rx_bps=crate::streaming::hud::rate(rx.saturating_sub(self.last_network_counters.0),hud.elapsed);
+            hud.tx_bps=crate::streaming::hud::rate(tx.saturating_sub(self.last_network_counters.1),hud.elapsed);
+            self.last_network_counters=(rx,tx);
+            hud.rx_total=rx;hud.tx_total=tx;hud.rx_packets=rp;hud.tx_packets=tp;hud.socket_errors=errors;
+            hud.server=self.backend.server_video_size();
+            self.hud=Some(hud);
             self.status = if let Some((width, height)) = self.backend.server_video_size() {
                 format!("srv:{width}x{height} {status}")
             } else {

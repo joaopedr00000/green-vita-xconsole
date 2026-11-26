@@ -6,6 +6,7 @@ use rtc::sansio::Protocol;
 use rtc::shared::{TaggedBytesMut, TransportContext, TransportProtocol};
 use std::net::SocketAddr;
 use std::time::Instant;
+use std::sync::atomic::{AtomicU64,Ordering};
 use tokio::net::UdpSocket;
 
 // Never let an incoming RTP burst monopolize the RTC worker; the next pump
@@ -17,6 +18,7 @@ pub(crate) struct RtcTransport {
     pub(crate) socket: UdpSocket,
     local_addr: SocketAddr,
     recv_buf: Vec<u8>,
+    rx_bytes:AtomicU64,tx_bytes:AtomicU64,rx_packets:AtomicU64,tx_packets:AtomicU64,errors:AtomicU64,
 }
 
 impl RtcTransport {
@@ -53,20 +55,16 @@ impl RtcTransport {
             socket,
             local_addr,
             recv_buf: vec![0u8; 2048],
+            rx_bytes:AtomicU64::new(0),tx_bytes:AtomicU64::new(0),rx_packets:AtomicU64::new(0),tx_packets:AtomicU64::new(0),errors:AtomicU64::new(0),
         })
     }
 
+    pub(crate) fn counters(&self)->(u64,u64,u64,u64,u64){(self.rx_bytes.load(Ordering::Relaxed),self.tx_bytes.load(Ordering::Relaxed),self.rx_packets.load(Ordering::Relaxed),self.tx_packets.load(Ordering::Relaxed),self.errors.load(Ordering::Relaxed))}
     pub(crate) async fn flush(&self, peer: &mut RTCPeerConnection) {
         while let Some(outgoing) = peer.poll_write() {
-            if let Err(error) = self
-                .socket
-                .send_to(&outgoing.message, outgoing.transport.peer_addr)
-                .await
-            {
-                eprintln!(
-                    "Failed to send WebRTC UDP packet to {}: {error}",
-                    outgoing.transport.peer_addr
-                );
+            match self.socket.send_to(&outgoing.message,outgoing.transport.peer_addr).await {
+                Ok(n)=>{self.tx_bytes.fetch_add(n as u64,Ordering::Relaxed);self.tx_packets.fetch_add(1,Ordering::Relaxed);}
+                Err(_)=>{self.errors.fetch_add(1,Ordering::Relaxed);eprintln!("Failed to send WebRTC UDP packet");}
             }
         }
     }
@@ -77,6 +75,7 @@ impl RtcTransport {
         for _ in 0..MAX_DATAGRAMS_PER_PUMP {
             match self.socket.try_recv_from(&mut self.recv_buf) {
                 Ok((n, peer_addr)) => {
+                    self.rx_bytes.fetch_add(n as u64,Ordering::Relaxed);self.rx_packets.fetch_add(1,Ordering::Relaxed);
                     if let Err(error) = peer.handle_read(TaggedBytesMut {
                         now: Instant::now(),
                         transport: TransportContext {
@@ -92,6 +91,7 @@ impl RtcTransport {
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(error) => {
+                    self.errors.fetch_add(1,Ordering::Relaxed);
                     eprintln!("Failed to receive WebRTC UDP packet: {error}");
                     break;
                 }

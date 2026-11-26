@@ -17,6 +17,8 @@ pub enum Command {
     SetRearTouchEnabled { title_id: String, enabled: bool },
     SetFrontTouchAuxiliaryButtons { title_id: String, enabled: bool },
     SetShowStreamDebugInfo(bool),
+    CycleHudPage,
+    CycleHudOpacity,
     SetStreamProfile(StreamProfile),
     SetCloudRegion(Option<String>),
     SetNativeInput(bool),
@@ -33,6 +35,8 @@ enum SettingsRow {
     GameRearTouch { title_id: String, enabled: bool },
     GameFrontTouchAuxiliary { title_id: String, enabled: bool },
     StreamDebug(bool),
+    HudPage,
+    HudOpacity,
     StreamingProfile(StreamProfile),
     CloudRegion,
     NativeInput,
@@ -86,6 +90,8 @@ fn settings_rows(app: &App) -> Vec<SettingsRow> {
     rows.push(SettingsRow::StreamDebug(
         app.settings.show_stream_debug_info,
     ));
+    rows.push(SettingsRow::HudPage);
+    rows.push(SettingsRow::HudOpacity);
     rows.push(SettingsRow::NativeInput);
     rows.push(SettingsRow::NativeDeadzone);
     rows.extend((0..16).map(SettingsRow::Control));
@@ -295,6 +301,12 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
 
                 ui.separator();
                 let pt = app.settings.locale.as_str().starts_with("pt");
+                let pages=if pt {["Resumo","Rede avançada","Vídeo e áudio","Controles","Visão técnica"]}else{["Summary","Advanced network","Video and audio","Input","Technical overview"]};
+                if focus_row(ui,selected_index==row_index,format!("{}: {} >",if pt{"Painel de diagnóstico"}else{"Diagnostic panel"},pages[app.settings.hud_page.min(4) as usize])){commands.push(Command::CycleHudPage.into());}
+                row_index+=1;
+                if focus_row(ui,selected_index==row_index,format!("{}: {}% >",if pt{"Opacidade do painel"}else{"Panel opacity"},app.settings.hud_opacity.clamp(40,100))){commands.push(Command::CycleHudOpacity.into());}
+                row_index+=1;
+                ui.separator();
                 ui.heading(if pt { "Mapeamento dos controles" } else { "Controller mapping" });
                 if checkbox_row(ui, selected_index == row_index, app.settings.native_input_worker, (if pt { "Leitura nativa independente (experimental)" } else { "Independent native input (experimental)" }).to_owned()) {
                     commands.push(Command::SetNativeInput(!app.settings.native_input_worker).into());
@@ -505,6 +517,8 @@ impl App {
             SettingsRow::StreamDebug(enabled) => {
                 return self.handle_settings_command(Command::SetShowStreamDebugInfo(!enabled));
             }
+            SettingsRow::HudPage=>return self.handle_settings_command(Command::CycleHudPage),
+            SettingsRow::HudOpacity=>return self.handle_settings_command(Command::CycleHudOpacity),
             SettingsRow::NativeInput => return self.handle_settings_command(Command::SetNativeInput(!self.settings.native_input_worker)),
             SettingsRow::NativeDeadzone => return self.handle_settings_command(Command::CycleNativeDeadzone),
             SettingsRow::Control(index) => return self.handle_settings_command(Command::CycleControl(*index)),
@@ -613,6 +627,8 @@ impl App {
                 self.settings.native_deadzone_percent = 0;
                 self.settings.save();
             }
+            Command::CycleHudPage=>{self.settings.hud_page=(self.settings.hud_page.min(4)+1)%5;self.settings.save();}
+            Command::CycleHudOpacity=>{self.settings.hud_opacity=match self.settings.hud_opacity{40=>60,60=>85,85=>100,_=>40};self.settings.save();}
             Command::SetShowStreamDebugInfo(enabled) => {
                 self.settings.show_stream_debug_info = enabled;
                 self.settings.save();

@@ -56,6 +56,13 @@ pub fn dispatch(native:bool,age_us:u64){
     let (count,sum)=if native{(&NATIVE_SENT,&NATIVE_DELAY)}else{(&SDL_SENT,&SDL_DELAY)};
     count.fetch_add(1,Ordering::Relaxed);sum.fetch_add(age_us,Ordering::Relaxed);
 }
+#[derive(Default)]
+pub(crate) struct InputMetrics {pub polls:u64,pub repeat_percent:u64,pub interval_us:u64,pub max_interval_us:u64,pub edge_drops:u64,pub native_count:u64,pub sdl_count:u64,pub native_avg_us:u64,pub sdl_avg_us:u64,pub native_active:bool}
+pub(crate) fn metrics()->InputMetrics{
+    let polls=POLLS.load(Ordering::Relaxed);let count=INTERVAL_COUNT.load(Ordering::Relaxed);
+    let n=NATIVE_SENT.load(Ordering::Relaxed);let s=SDL_SENT.load(Ordering::Relaxed);
+    InputMetrics{polls,repeat_percent:REPEATS.load(Ordering::Relaxed).saturating_mul(100).checked_div(polls).unwrap_or(0),interval_us:INTERVAL_SUM.load(Ordering::Relaxed).checked_div(count).unwrap_or(0),max_interval_us:INTERVAL_MAX.load(Ordering::Relaxed),edge_drops:EDGE_DROPS.load(Ordering::Relaxed),native_count:n,sdl_count:s,native_avg_us:NATIVE_DELAY.load(Ordering::Relaxed).checked_div(n).unwrap_or(0),sdl_avg_us:SDL_DELAY.load(Ordering::Relaxed).checked_div(s).unwrap_or(0),native_active:STATE.try_lock().ok().is_some_and(|x|x.sample.as_ref().is_some_and(|s|s.sampled_at.elapsed()<MAX_AGE))}
+}
 pub fn telemetry()->String{
     let polls=POLLS.load(Ordering::Relaxed);let repeats=REPEATS.load(Ordering::Relaxed);
     let count=INTERVAL_COUNT.load(Ordering::Relaxed);
