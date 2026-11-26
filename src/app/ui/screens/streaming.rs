@@ -178,8 +178,7 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                     row(ui,tr("Espera quadro / desenho","Frame wait / draw"),m.stages.map(|s|format!("{:.1} / {:.1} ms",s.claim_us as f64/1000.0,s.draw_us as f64/1000.0)).unwrap_or_else(||"—".to_owned()),white);
                     row(ui,tr("Áudio alvo / fila SDL","Audio target / SDL queue"),format!("{} / {} ms",m.audio_ms,m.audio_queued_ms),white);
                     row(ui,tr("Recuperação IDR","IDR recovery"),if h.waiting{tr("Aguardando","Waiting")}else{tr("Normal","Normal")},white);
-                    let modes=if pt{["Clássico","Adaptativo","Extremo"]}else{["Classic","Adaptive","Extreme"]};
-                    row(ui,tr("Sincronização","Pacing"),modes[app.settings.latency_mode.min(2) as usize],white);
+                    row(ui,tr("Sincronização","Pacing"),tr("Extremo (global)","Extreme (global)"),white);
                     row(ui,tr("Controle","Input"),match crate::native_input::last_source(){1=>"Gamepad RAW",2=>"SDL2",_=>"—"},white);
                 },
                 5=>{

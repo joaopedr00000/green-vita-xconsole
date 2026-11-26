@@ -19,7 +19,6 @@ pub enum Command {
     SetShowStreamDebugInfo(bool),
     CycleHudPage,
     CycleHudOpacity,
-    CycleLatencyMode,
     SetStreamProfile(StreamProfile),
     SetCloudRegion(Option<String>),
     CycleNativeDeadzone,
@@ -37,7 +36,6 @@ enum SettingsRow {
     StreamDebug(bool),
     HudPage,
     HudOpacity,
-    LatencyMode,
     StreamingProfile(StreamProfile),
     CloudRegion,
     NativeDeadzone,
@@ -92,7 +90,6 @@ fn settings_rows(app: &App) -> Vec<SettingsRow> {
     ));
     rows.push(SettingsRow::HudPage);
     rows.push(SettingsRow::HudOpacity);
-    rows.push(SettingsRow::LatencyMode);
     rows.push(SettingsRow::NativeDeadzone);
     rows.extend((0..16).map(SettingsRow::Control));
     rows.push(SettingsRow::ResetControls);
@@ -306,10 +303,6 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
                 row_index+=1;
                 if focus_row(ui,selected_index==row_index,format!("{}: {}% >",if pt{"Opacidade do painel"}else{"Panel opacity"},app.settings.hud_opacity.clamp(40,100))){commands.push(Command::CycleHudOpacity.into());}
                 row_index+=1;
-                let modes=if pt{["Clássico (0.3.2)","Adaptativo","Extremo"]}else{["Classic (0.3.2)","Adaptive","Extreme"]};
-                if focus_row(ui,selected_index==row_index,format!("{}: {} >",if pt{"Sincronização global"}else{"Global pacing"},modes[app.settings.latency_mode.min(2) as usize])){commands.push(Command::CycleLatencyMode.into());}
-                row_index+=1;
-                ui.small(if pt{"Extremo é o padrão global. Clássico e Adaptativo são alternativas de compatibilidade. Reconecte após alterar."}else{"Extreme is the global default. Classic and Adaptive are compatibility alternatives. Reconnect after changing."});
                 ui.small(if pt{"Recuperação adaptativa da fila de vídeo: automática."}else{"Adaptive video queue recovery: automatic."});
                 ui.separator();
                 ui.heading(if pt { "Mapeamento dos controles" } else { "Controller mapping" });
@@ -521,7 +514,6 @@ impl App {
             }
             SettingsRow::HudPage=>return self.handle_settings_command(Command::CycleHudPage),
             SettingsRow::HudOpacity=>return self.handle_settings_command(Command::CycleHudOpacity),
-            SettingsRow::LatencyMode=>return self.handle_settings_command(Command::CycleLatencyMode),
             SettingsRow::NativeDeadzone => return self.handle_settings_command(Command::CycleNativeDeadzone),
             SettingsRow::Control(index) => return self.handle_settings_command(Command::CycleControl(*index)),
             SettingsRow::ResetControls => return self.handle_settings_command(Command::ResetControls),
@@ -626,7 +618,6 @@ impl App {
                 self.settings.save();
             }
             Command::CycleHudPage=>{self.settings.hud_page=(self.settings.hud_page.min(5)+1)%6;self.settings.save();}
-            Command::CycleLatencyMode=>{self.settings.latency_mode=(self.settings.latency_mode.min(2)+1)%3;crate::settings::set_latency_mode(self.settings.latency_mode);self.settings.save();}
             Command::CycleHudOpacity=>{self.settings.hud_opacity=match self.settings.hud_opacity{40=>60,60=>85,85=>100,_=>40};self.settings.save();}
             Command::SetShowStreamDebugInfo(enabled) => {
                 self.settings.show_stream_debug_info = enabled;
