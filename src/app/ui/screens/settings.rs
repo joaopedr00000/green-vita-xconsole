@@ -307,9 +307,9 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
                 if focus_row(ui,selected_index==row_index,format!("{}: {}% >",if pt{"Opacidade do painel"}else{"Panel opacity"},app.settings.hud_opacity.clamp(40,100))){commands.push(Command::CycleHudOpacity.into());}
                 row_index+=1;
                 let modes=if pt{["Clássico (0.3.2)","Adaptativo","Extremo"]}else{["Classic (0.3.2)","Adaptive","Extreme"]};
-                if focus_row(ui,selected_index==row_index,format!("{}: {} >",if pt{"Sincronização experimental"}else{"Experimental pacing"},modes[app.settings.latency_mode.min(2) as usize])){commands.push(Command::CycleLatencyMode.into());}
+                if focus_row(ui,selected_index==row_index,format!("{}: {} >",if pt{"Sincronização global"}else{"Global pacing"},modes[app.settings.latency_mode.min(2) as usize])){commands.push(Command::CycleLatencyMode.into());}
                 row_index+=1;
-                ui.small(if pt{"Extremo pode reduzir a fluidez. Reconecte para testar."}else{"Extreme may reduce smoothness. Reconnect to test."});
+                ui.small(if pt{"Extremo é o padrão global. Clássico e Adaptativo são alternativas de compatibilidade. Reconecte após alterar."}else{"Extreme is the global default. Classic and Adaptive are compatibility alternatives. Reconnect after changing."});
                 ui.small(if pt{"Recuperação adaptativa da fila de vídeo: automática."}else{"Adaptive video queue recovery: automatic."});
                 ui.separator();
                 ui.heading(if pt { "Mapeamento dos controles" } else { "Controller mapping" });

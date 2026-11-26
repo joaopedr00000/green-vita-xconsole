@@ -1,4 +1,12 @@
 //! Bounded playback policies, independent of Vita hardware.
+/// Global default for all streaming quality profiles.
+pub const DEFAULT_LATENCY_MODE:u8=2;
+pub fn normalize_latency_mode(mode:u8)->u8{if mode<=2{mode}else{DEFAULT_LATENCY_MODE}}
+#[cfg(test)]
+mod latency_default_tests{
+    use super::*;
+    #[test]fn global_default_is_extreme(){assert_eq!(DEFAULT_LATENCY_MODE,2);assert_eq!(normalize_latency_mode(255),2);assert_eq!(normalize_latency_mode(0),0);assert_eq!(normalize_latency_mode(1),1);assert_eq!(normalize_latency_mode(2),2);}
+}
 pub fn pcm_cap_ms(target: u32) -> u32 { target.clamp(50,110) + 50 }
 pub fn retry_delay_ms(failures: u32) -> u64 { (100u64 << failures.saturating_sub(1).min(3)).min(800) }
 #[cfg(test)]

@@ -33,8 +33,8 @@ impl StreamProfile {
 }
 static ACTIVE_STREAM_PROFILE: AtomicU8 = AtomicU8::new(2);
 // 0 = exact 0.3.2 pacing, 1 = adaptive, 2 = extreme.
-static LATENCY_MODE:AtomicU8=AtomicU8::new(1);
-pub(crate) fn set_latency_mode(mode:u8){LATENCY_MODE.store(mode.min(2),Ordering::Relaxed);}
+static LATENCY_MODE:AtomicU8=AtomicU8::new(crate::streaming::policy::DEFAULT_LATENCY_MODE);
+pub(crate) fn set_latency_mode(mode:u8){LATENCY_MODE.store(crate::streaming::policy::normalize_latency_mode(mode),Ordering::Relaxed);}
 pub(crate) fn latency_mode()->u8{LATENCY_MODE.load(Ordering::Relaxed)}
 pub(crate) fn set_active_stream_profile(profile: StreamProfile) {
     ACTIVE_STREAM_PROFILE.store(match profile {
@@ -152,6 +152,10 @@ pub struct Settings {
     /// 0 summary, 1 network, 2 video/audio, 3 controls, 4 overview.
     pub hud_page:u8,
     pub hud_opacity:u8,
+    // A new persisted key deliberately retires the old experimental default.
+    // Missing key (including existing 0.3.2 / 0.3.3 lab settings) uses Extreme.
+    // Subsequent explicit compatibility choices persist under the new key.
+    #[serde(rename = "global_pacing_mode")]
     pub latency_mode:u8,
     pub stream_profile: StreamProfile,
     /// Only a host returned in the signed-in account's regional allowlist is accepted.
@@ -187,7 +191,7 @@ impl Default for Settings {
         Self {
             locale: Locale::default(),
             show_stream_debug_info: false,
-            hud_page:0,hud_opacity:85,latency_mode:1,
+            hud_page:0,hud_opacity:85,latency_mode:crate::streaming::policy::DEFAULT_LATENCY_MODE,
             stream_profile: StreamProfile::Quality,
             preferred_cloud_region: None,
             game_profiles: HashMap::new(),
@@ -230,6 +234,7 @@ impl Settings {
                 if let Ok(mut settings) = serde_json::from_str::<Self>(&data) {
                     if settings.control_map.iter().any(|v| *v > 16) { settings.control_map = crate::streaming::input::default_control_map(); }
                     settings.native_deadzone_percent = settings.native_deadzone_percent.min(20);
+                    settings.latency_mode = crate::streaming::policy::normalize_latency_mode(settings.latency_mode);
                     return settings;
                 }
             }
