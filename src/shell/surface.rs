@@ -192,11 +192,12 @@ impl VitaSurface {
             primitives,
             textures_delta,
         )?;
+        let before_present=Instant::now();
         self.canvas.present();
         if let Some((decoded_at, enqueued_at,stages)) = self.pending_display_timestamps.take() {
             let now = Instant::now();
             crate::streaming::video::metrics::METRICS.presented.fetch_add(1,Ordering::Relaxed);
-            crate::streaming::video::metrics::presented(crate::streaming::hud::PresentedStages{decode:stages,display_us:now.saturating_duration_since(decoded_at).as_micros() as u64,total_us:now.saturating_duration_since(enqueued_at).as_micros() as u64});
+            crate::streaming::video::metrics::presented(crate::streaming::hud::PresentedStages{decode:stages,display_us:now.saturating_duration_since(decoded_at).as_micros() as u64,pre_present_us:before_present.saturating_duration_since(decoded_at).as_micros() as u64,present_call_us:now.saturating_duration_since(before_present).as_micros() as u64,total_us:now.saturating_duration_since(enqueued_at).as_micros() as u64});
             crate::streaming::video::metrics::METRICS.display_queue_us.store(
                 now.saturating_duration_since(decoded_at).as_micros() as u64,
                 Ordering::Relaxed,

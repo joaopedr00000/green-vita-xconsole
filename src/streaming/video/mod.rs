@@ -103,7 +103,12 @@ impl DirectVideoOutput {
             .unwrap_or_else(|| state.displayed.map_or(0, |displayed| 1 - displayed));
         // Reuse only the unpublished-to-screen target. Invalidate the older
         // generation before writing so a no-output/error cannot expose stale pixels.
-        if wait_ms<67 && state.pending.take().is_some(){metrics::CATCH_UP_REPLACEMENTS.fetch_add(1,std::sync::atomic::Ordering::Relaxed);}
+        // The pending texture is never the displayed one. Clear its generation
+        // even on the ordinary timeout before writing into it. This protects
+        // against a no-output/error return on both recovery and normal paths.
+        if state.pending.take().is_some() && wait_ms<67 {
+            metrics::CATCH_UP_REPLACEMENTS.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+        }
         Some(DirectVideoTargetGuard {
             state,
             target: targets[index],

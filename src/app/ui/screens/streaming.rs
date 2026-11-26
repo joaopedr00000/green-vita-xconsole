@@ -140,7 +140,7 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                         row(ui,tr("Pipeline méd / máx","Pipeline avg / max"),if m.stage_samples>0{format!("{:.1} / {:.1} ms",m.pipeline_avg_us as f64/1000.0,m.pipeline_max_us as f64/1000.0)}else{"—".to_owned()},white);
                     }
                     row(ui,tr("Fila / obsoletos","Queue / stale"),format!("{} / {}",m.queue_depth,m.stale_handoffs),white);
-                    row(ui,tr("Recuperação de fila¹","Queue catch-up¹"),format!("{} · {}",if app.settings.video_catch_up{tr("Ativa","On")}else{tr("Off","Off")},m.catch_up_replacements),white);
+                    row(ui,tr("Recuperação de fila¹","Queue catch-up¹"),format!("{} · {}",tr("Auto","Auto"),m.catch_up_replacements),white);
                     row(ui,tr("Descartes / erros","Drops / errors"),format!("{} / {}",h.dropped,h.errors),white);
                     row(ui,tr("Resync / reset¹","Resync / reset¹"),format!("{} / {}",m.resyncs,m.resets),white);
                     row(ui,tr("Buffer de áudio","Audio target"),format!("{} ms",m.audio_ms),white);
@@ -165,6 +165,7 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                     row(ui,tr("Descartes / erros","Drops / errors"),format!("{} / {}",h.dropped,h.errors),white);
                     row(ui,tr("Fila cheia / trocas","Queue full / replaced"),format!("{} / {}",m.queue_full,m.replaced),white);
                     row(ui,tr("Montagem / decode","Assembly / decode"),format!("{:.1} / {:.1} ms",m.rtp_avg_us as f64/1000.0,m.decode_us as f64/1000.0),white);
+                    row(ui,tr("Antes / chamada present","Before / present call"),m.stages.map(|s|format!("{:.1} / {:.1} ms",s.pre_present_us as f64/1000.0,s.present_call_us as f64/1000.0)).unwrap_or_else(||"—".to_owned()),white);
                     row(ui,tr("Buffer de áudio","Audio target"),format!("{} ms",m.audio_ms),white);
                     row(ui,tr("Recuperação IDR","IDR recovery"),if h.waiting{tr("Aguardando","Waiting")}else{tr("Normal","Normal")},white);
                     row(ui,tr("Controle","Input"),if input.native_active{tr("Nativo","Native")}else{"SDL2"},white);

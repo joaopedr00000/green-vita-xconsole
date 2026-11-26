@@ -284,12 +284,12 @@ pub async fn run(mut app: App) -> Result<()> {
         }
         if !matches!(&app.state, AppState::Streaming(s) if !s.paused) { crate::native_input::disable(); }
 
-        // Select the newest already-decoded picture immediately before rendering.
+        // Finish CPU-side UI tessellation before selecting the newest texture.
+        let clipped_primitives =
+            egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
         if let Some(streaming)=app.state.streaming_mut(){streaming.refresh_video_frame();}
         surface.sync_video_frame(app.state.streaming())?;
         surface.draw_scene(matches!(&app.state, AppState::Streaming(_)))?;
-        let clipped_primitives =
-            egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
         surface.paint_egui(
             full_output.pixels_per_point,
             &clipped_primitives,

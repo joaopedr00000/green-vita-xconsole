@@ -19,7 +19,6 @@ pub enum Command {
     SetShowStreamDebugInfo(bool),
     CycleHudPage,
     CycleHudOpacity,
-    SetVideoCatchUp(bool),
     SetStreamProfile(StreamProfile),
     SetCloudRegion(Option<String>),
     SetNativeInput(bool),
@@ -38,7 +37,6 @@ enum SettingsRow {
     StreamDebug(bool),
     HudPage,
     HudOpacity,
-    VideoCatchUp,
     StreamingProfile(StreamProfile),
     CloudRegion,
     NativeInput,
@@ -94,7 +92,6 @@ fn settings_rows(app: &App) -> Vec<SettingsRow> {
     ));
     rows.push(SettingsRow::HudPage);
     rows.push(SettingsRow::HudOpacity);
-    rows.push(SettingsRow::VideoCatchUp);
     rows.push(SettingsRow::NativeInput);
     rows.push(SettingsRow::NativeDeadzone);
     rows.extend((0..16).map(SettingsRow::Control));
@@ -309,9 +306,7 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
                 row_index+=1;
                 if focus_row(ui,selected_index==row_index,format!("{}: {}% >",if pt{"Opacidade do painel"}else{"Panel opacity"},app.settings.hud_opacity.clamp(40,100))){commands.push(Command::CycleHudOpacity.into());}
                 row_index+=1;
-                ui.separator();
-                if checkbox_row(ui,selected_index==row_index,app.settings.video_catch_up,(if pt{"Recuperar fila de vídeo (experimental)"}else{"Video queue catch-up (experimental)"}).to_owned()){commands.push(Command::SetVideoCatchUp(!app.settings.video_catch_up).into());}
-                row_index+=1;
+                ui.small(if pt{"Recuperação adaptativa da fila de vídeo: automática."}else{"Adaptive video queue recovery: automatic."});
                 ui.separator();
                 ui.heading(if pt { "Mapeamento dos controles" } else { "Controller mapping" });
                 if checkbox_row(ui, selected_index == row_index, app.settings.native_input_worker, (if pt { "Leitura nativa independente (experimental)" } else { "Independent native input (experimental)" }).to_owned()) {
@@ -525,7 +520,6 @@ impl App {
             }
             SettingsRow::HudPage=>return self.handle_settings_command(Command::CycleHudPage),
             SettingsRow::HudOpacity=>return self.handle_settings_command(Command::CycleHudOpacity),
-            SettingsRow::VideoCatchUp=>return self.handle_settings_command(Command::SetVideoCatchUp(!self.settings.video_catch_up)),
             SettingsRow::NativeInput => return self.handle_settings_command(Command::SetNativeInput(!self.settings.native_input_worker)),
             SettingsRow::NativeDeadzone => return self.handle_settings_command(Command::CycleNativeDeadzone),
             SettingsRow::Control(index) => return self.handle_settings_command(Command::CycleControl(*index)),
@@ -635,7 +629,6 @@ impl App {
                 self.settings.save();
             }
             Command::CycleHudPage=>{self.settings.hud_page=(self.settings.hud_page.min(4)+1)%5;self.settings.save();}
-            Command::SetVideoCatchUp(enabled)=>{self.settings.video_catch_up=enabled;crate::settings::set_video_catch_up(enabled);self.settings.save();}
             Command::CycleHudOpacity=>{self.settings.hud_opacity=match self.settings.hud_opacity{40=>60,60=>85,85=>100,_=>40};self.settings.save();}
             Command::SetShowStreamDebugInfo(enabled) => {
                 self.settings.show_stream_debug_info = enabled;

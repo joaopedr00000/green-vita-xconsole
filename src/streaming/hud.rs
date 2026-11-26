@@ -31,7 +31,7 @@ mod tests{
 #[derive(Clone,Copy,Debug,Default)]
 pub(crate) struct DecodeStages {pub queue_us:u64,pub texture_us:u64,pub decode_us:u64}
 #[derive(Clone,Copy,Debug,Default)]
-pub(crate) struct PresentedStages {pub decode:DecodeStages,pub display_us:u64,pub total_us:u64}
+pub(crate) struct PresentedStages {pub decode:DecodeStages,pub display_us:u64,pub pre_present_us:u64,pub present_call_us:u64,pub total_us:u64}
 #[derive(Clone,Copy,Debug)]
 pub(crate) struct RttReading {pub current_us:u64,pub average_us:u64,pub responses:u64,pub observed_at:Instant}
 impl RttReading {
