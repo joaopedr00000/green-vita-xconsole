@@ -19,7 +19,7 @@ pub struct VitaSurface {
     direct_video_output: Option<Arc<DirectVideoOutput>>,
     video_width: u32,
     video_height: u32,
-    pending_display_timestamps: Option<(Instant, Instant, crate::streaming::hud::DecodeStages)>, 
+    pending_display_timestamps: Option<(Instant, Instant, Instant, crate::streaming::hud::DecodeStages)>, 
     egui_painter: SdlEguiPainter,
 }
 
@@ -70,7 +70,7 @@ impl VitaSurface {
         let index=frame.texture_index;
         if index>=2{anyhow::bail!("decoder returned invalid direct texture index {index}");}
         self.displayed_video_texture=Some(index);
-        self.pending_display_timestamps=Some((frame.decoded_at,frame.enqueued_at,frame.stages));
+        self.pending_display_timestamps=Some((frame.decoded_at,frame.enqueued_at,Instant::now(),frame.stages));
         Ok(())
     }
 
@@ -164,25 +164,18 @@ impl VitaSurface {
         Ok(())
     }
 
-    pub fn paint_egui(
-        &mut self,
-        pixels_per_point: f32,
-        primitives: &[egui::ClippedPrimitive],
-        textures_delta: &egui::TexturesDelta,
-    ) -> Result<()> {
-        self.egui_painter.paint(
-            &mut self.canvas,
-            [WIDTH, HEIGHT],
-            pixels_per_point,
-            primitives,
-            textures_delta,
-        )?;
+    pub fn prepare_egui(&mut self,pixels_per_point:f32,primitives:&[egui::ClippedPrimitive],textures_delta:&egui::TexturesDelta)->Result<()> {
+        self.egui_painter.prepare(&mut self.canvas,[WIDTH,HEIGHT],pixels_per_point,primitives,textures_delta)
+    }
+
+    pub fn paint_egui(&mut self,textures_delta:&egui::TexturesDelta) -> Result<()> {
+        self.egui_painter.draw_prepared(&mut self.canvas,textures_delta)?;
         let before_present=Instant::now();
         self.canvas.present();
-        if let Some((decoded_at, enqueued_at,stages)) = self.pending_display_timestamps.take() {
+        if let Some((decoded_at, enqueued_at,claimed_at,stages)) = self.pending_display_timestamps.take() {
             let now = Instant::now();
             crate::streaming::video::metrics::METRICS.presented.fetch_add(1,Ordering::Relaxed);
-            crate::streaming::video::metrics::presented(crate::streaming::hud::PresentedStages{decode:stages,display_us:now.saturating_duration_since(decoded_at).as_micros() as u64,pre_present_us:before_present.saturating_duration_since(decoded_at).as_micros() as u64,present_call_us:now.saturating_duration_since(before_present).as_micros() as u64,total_us:now.saturating_duration_since(enqueued_at).as_micros() as u64});
+            crate::streaming::video::metrics::presented(crate::streaming::hud::PresentedStages{decode:stages,display_us:now.saturating_duration_since(decoded_at).as_micros() as u64,pre_present_us:before_present.saturating_duration_since(decoded_at).as_micros() as u64,claim_us:claimed_at.saturating_duration_since(decoded_at).as_micros() as u64,draw_us:before_present.saturating_duration_since(claimed_at).as_micros() as u64,present_call_us:now.saturating_duration_since(before_present).as_micros() as u64,total_us:now.saturating_duration_since(enqueued_at).as_micros() as u64});
             crate::streaming::video::metrics::METRICS.display_queue_us.store(
                 now.saturating_duration_since(decoded_at).as_micros() as u64,
                 Ordering::Relaxed,

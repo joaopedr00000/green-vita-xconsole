@@ -38,3 +38,11 @@ mod video_tests{
         assert_eq!(catch_up_wait_ms(60_000,1,Some(0)),67);
     }
 }
+
+/// A static overlay can reuse prepared geometry for at most 250ms.
+pub fn reuse_overlay(age_ms:u64)->bool{age_ms<250}
+#[cfg(test)]
+mod overlay_tests{
+    use super::*;
+    #[test]fn overlay_refresh_is_bounded(){assert!(reuse_overlay(0));assert!(reuse_overlay(249));assert!(!reuse_overlay(250));assert!(!reuse_overlay(u64::MAX));}
+}

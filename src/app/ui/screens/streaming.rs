@@ -166,6 +166,7 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                     row(ui,tr("Fila cheia / trocas","Queue full / replaced"),format!("{} / {}",m.queue_full,m.replaced),white);
                     row(ui,tr("Montagem / decode","Assembly / decode"),format!("{:.1} / {:.1} ms",m.rtp_avg_us as f64/1000.0,m.decode_us as f64/1000.0),white);
                     row(ui,tr("Antes / chamada present","Before / present call"),m.stages.map(|s|format!("{:.1} / {:.1} ms",s.pre_present_us as f64/1000.0,s.present_call_us as f64/1000.0)).unwrap_or_else(||"—".to_owned()),white);
+                    row(ui,tr("Espera quadro / desenho","Frame wait / draw"),m.stages.map(|s|format!("{:.1} / {:.1} ms",s.claim_us as f64/1000.0,s.draw_us as f64/1000.0)).unwrap_or_else(||"—".to_owned()),white);
                     row(ui,tr("Buffer de áudio","Audio target"),format!("{} ms",m.audio_ms),white);
                     row(ui,tr("Recuperação IDR","IDR recovery"),if h.waiting{tr("Aguardando","Waiting")}else{tr("Normal","Normal")},white);
                     row(ui,tr("Controle","Input"),if input.native_active{"Gamepad RAW"}else{"SDL2"},white);

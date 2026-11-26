@@ -8,7 +8,15 @@ pub struct SdlEguiPainter {
     textures: HashMap<egui::TextureId, SdlEguiTexture>,
     pending_textures: HashMap<egui::TextureId, egui::epaint::ImageDelta>,
     pending_order: VecDeque<egui::TextureId>,
-    vertices: Vec<sdl2::render::Vertex>,
+    prepared: Vec<PreparedMesh>,
+}
+
+#[derive(Default)]
+struct PreparedMesh {
+    clip:Option<sdl2::rect::Rect>,
+    texture_id:Option<egui::TextureId>,
+    vertices:Vec<sdl2::render::Vertex>,
+    indices:Vec<u32>,
 }
 
 struct SdlEguiTexture {
@@ -17,7 +25,9 @@ struct SdlEguiTexture {
 }
 
 impl SdlEguiPainter {
-    pub fn paint(
+    // Upload atlas updates and convert vertices before the video renderer claims
+    // a texture. Prepared geometry remains valid until the next UI refresh.
+    pub fn prepare(
         &mut self,
         canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
         screen_size: [u32; 2],
@@ -26,49 +36,50 @@ impl SdlEguiPainter {
         textures_delta: &egui::TexturesDelta,
     ) -> Result<()> {
         self.apply_textures(canvas, primitives, textures_delta)?;
-
-        for clipped_primitive in primitives {
-            let Some(clip_rect) =
-                Self::sdl_clip_rect(clipped_primitive.clip_rect, screen_size, pixels_per_point)
-            else {
-                continue;
-            };
-            canvas.set_clip_rect(clip_rect);
-
-            let egui::epaint::Primitive::Mesh(mesh) = &clipped_primitive.primitive else {
-                continue;
-            };
-            if mesh.indices.is_empty() || mesh.vertices.is_empty() {
-                continue;
-            }
-
-            self.vertices.clear();
-            let Some(texture) = self.textures.get(&mesh.texture_id) else {
-                // A catalog image can wait in the upload queue for a later frame. Drawing it
-                // without a texture produces an opaque rectangle, so leave its space empty.
-                continue;
-            };
-            let uv_scale = texture.uv_scale;
-            self.vertices.extend(
-                mesh.vertices
-                    .iter()
-                    .map(|vertex| Self::sdl_vertex(vertex, pixels_per_point, uv_scale)),
-            );
-
-            canvas
-                .render_geometry(&self.vertices, Some(&texture.texture), &mesh.indices)
-                .map_err(anyhow::Error::msg)
-                .context("failed to render egui geometry through SDL")?;
+        let mut count=0;
+        for primitive in primitives {
+            let Some(clip)=Self::sdl_clip_rect(primitive.clip_rect,screen_size,pixels_per_point) else {continue;};
+            let egui::epaint::Primitive::Mesh(mesh)=&primitive.primitive else{continue;};
+            if mesh.indices.is_empty()||mesh.vertices.is_empty(){continue;}
+            let Some(texture)=self.textures.get(&mesh.texture_id) else{continue;};
+            let uv_scale=texture.uv_scale;
+            if count==self.prepared.len(){self.prepared.push(PreparedMesh::default());}
+            let batch=&mut self.prepared[count];
+            batch.clip=Some(clip);
+            batch.texture_id=Some(mesh.texture_id);
+            batch.vertices.clear();
+            batch.vertices.extend(mesh.vertices.iter().map(|vertex|Self::sdl_vertex(vertex,pixels_per_point,uv_scale)));
+            batch.indices.clear();
+            batch.indices.extend_from_slice(&mesh.indices);
+            count+=1;
         }
+        self.prepared.truncate(count);
+        Ok(())
+    }
 
-        canvas.set_clip_rect(None);
+    pub fn draw_prepared(
+        &mut self,
+        canvas:&mut sdl2::render::Canvas<sdl2::video::Window>,
+        textures_delta:&egui::TexturesDelta,
+    )->Result<()> {
+        let mut last_clip=None;
+        for batch in &self.prepared {
+            let Some(texture)=batch.texture_id.and_then(|id|self.textures.get(&id)) else{continue;};
+            if last_clip!=batch.clip {
+                canvas.set_clip_rect(batch.clip);
+                last_clip=batch.clip;
+            }
+            canvas.render_geometry(&batch.vertices,Some(&texture.texture),&batch.indices)
+                .map_err(anyhow::Error::msg).context("failed to render prepared egui geometry")?;
+        }
+        if last_clip.is_some(){canvas.set_clip_rect(None);}
         for texture_id in &textures_delta.free {
             self.textures.remove(texture_id);
             self.pending_textures.remove(texture_id);
         }
-        self.pending_order
-            .retain(|texture_id| self.pending_textures.contains_key(texture_id));
-
+        if !textures_delta.free.is_empty(){
+            self.pending_order.retain(|id|self.pending_textures.contains_key(id));
+        }
         Ok(())
     }
 
@@ -94,6 +105,7 @@ impl SdlEguiPainter {
             Self::upload_texture(canvas, &mut self.textures, *texture_id, delta)?;
         }
 
+        if self.pending_order.is_empty(){return Ok(());}
         let visible_texture_ids: HashSet<_> = primitives
             .iter()
             .filter_map(|primitive| match &primitive.primitive {

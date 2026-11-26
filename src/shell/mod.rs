@@ -60,6 +60,9 @@ pub async fn run(mut app: App) -> Result<()> {
     let mut network_was_connected = false;
     let mut backgrounded = false;
     let mut audio_session_output: Option<std::sync::Arc<crate::streaming::video::DirectVideoOutput>> = None;
+    // A stable, noninteractive playback overlay needs only four UI updates/s.
+    // All video, input, audio and backend work still runs on every loop.
+    let mut overlay_cache:Option<(Instant,(bool,u8,u8,crate::settings::Locale))>=None;
 
     loop {
         let loop_started_at = Instant::now();
@@ -158,6 +161,7 @@ pub async fn run(mut app: App) -> Result<()> {
             }
         }
         if interrupted {
+            overlay_cache=None;
             crate::native_input::disable();
             rear_touch_buttons = RearTouchButtons::default();
             back_hold_since = None;
@@ -167,6 +171,7 @@ pub async fn run(mut app: App) -> Result<()> {
             direct_commands.clear();
         }
         if backgrounded {
+            overlay_cache=None;
             crate::native_input::disable();
             sleep(Duration::from_millis(50)).await;
             continue;
@@ -243,7 +248,7 @@ pub async fn run(mut app: App) -> Result<()> {
             (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a,b),
             (None,None) => true, _ => false,
         };
-        if !same { audio_renderer.clear_session(); }
+        if !same { audio_renderer.clear_session(); overlay_cache=None; }
         audio_session_output = output;
         let native_config = match &app.state {
             AppState::Streaming(s) if !s.paused => s.native_config(&app.settings),
@@ -255,6 +260,14 @@ pub async fn run(mut app: App) -> Result<()> {
         }
         surface.prepare_video_output(app.state.streaming())?;
 
+        let cacheable=matches!(&app.state,AppState::Streaming(s) if !s.paused && s.hint_started_at.elapsed()>=Duration::from_secs(3))
+            && hold_progress.is_none() && !vita_ime_active;
+        let key=(app.settings.show_stream_debug_info,app.settings.hud_page,app.settings.hud_opacity,app.settings.locale);
+        let reuse=cacheable && egui_events.is_empty() && overlay_cache.as_ref().is_some_and(|(at,k)|*k==key && crate::streaming::policy::reuse_overlay(at.elapsed().as_millis() as u64));
+        let textures_delta=if reuse {
+            // Reuse only GPU geometry, never repeat a texture upload/free delta.
+            egui::TexturesDelta::default()
+        }else{
         let raw_input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -285,17 +298,21 @@ pub async fn run(mut app: App) -> Result<()> {
         }
         if !matches!(&app.state, AppState::Streaming(s) if !s.paused) { crate::native_input::disable(); }
 
-        // Finish CPU-side UI tessellation before selecting the newest texture.
+        // Complete UI uploads and vertex conversion before claiming a video texture.
         let clipped_primitives =
             egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
-        // Claim the latest published texture directly; RTC still reports first-frame and errors.
+        surface.prepare_egui(full_output.pixels_per_point,&clipped_primitives,&full_output.textures_delta)?;
+        // Cache only an unchanged, noninteractive stream. Pause/hold/menu/hint
+        // always render live, and every input event still reaches egui.
+        overlay_cache=if cacheable && matches!(&app.state,AppState::Streaming(s) if !s.paused) && full_output.textures_delta.free.is_empty(){
+            Some((Instant::now(),key))
+        }else{None};
+        full_output.textures_delta
+        };
+        // Claim the newest decoded texture at the last safe moment.
         surface.sync_video_frame(app.state.streaming())?;
         surface.draw_scene(matches!(&app.state, AppState::Streaming(_)))?;
-        surface.paint_egui(
-            full_output.pixels_per_point,
-            &clipped_primitives,
-            &full_output.textures_delta,
-        )?;
+        surface.paint_egui(&textures_delta)?;
         // Refresh controls after potentially expensive video/UI presentation,
         // rather than making an input change wait for the next render iteration.
         // pump_events updates SDL state; events are consumed by the regular loop.
