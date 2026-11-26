@@ -28,13 +28,13 @@ pub(crate) struct VideoTextureTarget {
 }
 
 struct DirectVideoOutputState {
-    targets: Option<[VideoTextureTarget; 2]>,
+    targets: Option<Vec<VideoTextureTarget>>,
     displayed: Option<usize>,
     pending: Option<DecodedFrame>,
     next_generation: u64,
 }
 
-/// Synchronizes the decoder thread with the two SDL/GXM textures owned by the render thread.
+/// Synchronizes the decoder thread with the SDL/GXM textures owned by the render thread.
 /// Pointers are stored as integers so the platform-specific unsafe boundary stays in the code
 /// that registers and consumes the textures.
 pub(crate) struct DirectVideoOutput {
@@ -63,7 +63,7 @@ impl DirectVideoOutput {
         }
     }
 
-    pub(crate) fn set_targets(&self, targets: [VideoTextureTarget; 2]) {
+    pub(crate) fn set_targets(&self, targets: Vec<VideoTextureTarget>) {
         if let Ok(mut state) = self.state.lock() {
             state.targets = Some(targets);
             state.displayed = None;
@@ -123,7 +123,7 @@ impl DirectVideoOutput {
 
     pub(super) fn lock_decode_target(&self,wait_ms:u64) -> Option<DirectVideoTargetGuard<'_>> {
         let mut state = self.state.lock().ok()?;
-        if state.pending.is_some() {
+        if state.pending.is_some() && state.targets.as_ref().is_some_and(|t|t.len()==2) {
             let (waited_state, _) = self
                 .frame_displayed
                 .wait_timeout_while(state, Duration::from_millis(wait_ms).min(MAX_PENDING_TEXTURE_WAIT), |state| {
@@ -132,24 +132,24 @@ impl DirectVideoOutput {
                 .ok()?;
             state = waited_state;
         }
-        let targets = state.targets?;
-        let index = state
-            .pending
-            .map(|frame| frame.texture_index)
-            .unwrap_or_else(|| state.displayed.map_or(0, |displayed| 1 - displayed));
+        let count=state.targets.as_ref()?.len();
+        let pending=state.pending.map(|f|f.texture_index);
+        // Keep the pending picture available until a newer picture actually exists.
+        let index=crate::streaming::policy::free_texture(count,state.displayed,pending).or(pending)?;
+        let target=*state.targets.as_ref()?.get(index)?;
         // Reuse only the unpublished-to-screen target. Invalidate the older
         // generation before writing so a no-output/error cannot expose stale pixels.
         // The pending texture is never the displayed one. Clear its generation
         // even on the ordinary timeout before writing into it. This protects
         // against a no-output/error return on both recovery and normal paths.
-        if state.pending.take().is_some() {
+        if pending==Some(index) && state.pending.take().is_some() {
             metrics::OUTPUT_REPLACEMENTS.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
             if wait_ms<67 {metrics::CATCH_UP_REPLACEMENTS.fetch_add(1,std::sync::atomic::Ordering::Relaxed);}
         }
         Some(DirectVideoTargetGuard {
             state,
             ready:&self.frame_ready,
-            target: targets[index],
+            target,
             index,
         })
     }
@@ -166,7 +166,7 @@ impl DirectVideoTargetGuard<'_> {
     pub(super) fn publish(mut self,decoded_at:Instant,enqueued_at:Instant,stages:crate::streaming::hud::DecodeStages) -> DecodedFrame {
         self.state.next_generation = self.state.next_generation.wrapping_add(1);
         let frame=DecodedFrame{texture_index:self.index,generation:self.state.next_generation,decoded_at,enqueued_at,stages};
-        self.state.pending=Some(frame);
+        if self.state.pending.replace(frame).is_some(){metrics::OUTPUT_REPLACEMENTS.fetch_add(1,std::sync::atomic::Ordering::Relaxed);}
         drop(self.state);
         self.ready.notify_one();
         frame

@@ -7,6 +7,7 @@ mod diagnostics;
 mod i18n;
 mod input;
 mod native_input;
+mod experimental;
 mod jobs;
 mod safe_memory;
 mod settings;

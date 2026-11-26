@@ -14,7 +14,7 @@ pub const HEIGHT: u32 = 544;
 
 pub struct VitaSurface {
     pub(crate) canvas: Canvas<Window>,
-    video_textures: Option<[Texture; 2]>,
+    video_textures: Option<Vec<Texture>>,
     displayed_video_texture: Option<usize>,
     direct_video_output: Option<Arc<DirectVideoOutput>>,
     video_width: u32,
@@ -84,7 +84,7 @@ impl VitaSurface {
     }
     fn accept_video_frame(&mut self,frame:crate::streaming::video::DecodedFrame)->Result<bool>{
         let index=frame.texture_index;
-        if index>=2{anyhow::bail!("decoder returned invalid direct texture index {index}");}
+        if index>=self.video_textures.as_ref().map_or(0,Vec::len){anyhow::bail!("decoder returned invalid direct texture index {index}");}
         self.displayed_video_texture=Some(index);
         self.pending_display_timestamps=Some((frame.decoded_at,frame.enqueued_at,Instant::now(),frame.stages));
         Ok(true)
@@ -119,19 +119,12 @@ impl VitaSurface {
                 .map_err(anyhow::Error::msg)
                 .context("failed to create direct SDL BGR565 video texture")
         };
-        let mut textures = [create_texture()?, create_texture()?];
-        let mut targets = [
-            VideoTextureTarget {
-                ptr: 0,
-                pitch: 0,
-                capacity: 0,
-            },
-            VideoTextureTarget {
-                ptr: 0,
-                pitch: 0,
-                capacity: 0,
-            },
-        ];
+        let mut textures=vec![create_texture()?,create_texture()?];
+        if streaming_lab_triple(){
+            match create_texture(){Ok(t)=>textures.push(t),Err(_)=>crate::diagnostics::step("lab_texture","DOUBLE_FALLBACK")}
+        }
+        crate::diagnostics::step("lab_texture",if textures.len()==3{"TRIPLE"}else{"DOUBLE"});
+        let mut targets=vec![VideoTextureTarget{ptr:0,pitch:0,capacity:0};textures.len()];
         for (index, texture) in textures.iter_mut().enumerate() {
             texture
                 .with_lock(None, |pixels, pitch| {
@@ -232,3 +225,5 @@ impl VitaSurface {
         }
     }
 }
+
+fn streaming_lab_triple()->bool{crate::experimental::triple_enabled()}

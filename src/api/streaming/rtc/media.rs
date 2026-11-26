@@ -59,6 +59,7 @@ pub(crate) struct VideoReceiver {
 }
 
 impl VideoReceiver {
+    pub(crate) fn decoded_frame_id(&self)->u64{self.next_frame_id}
     pub(crate) fn new(
         config: DecoderConfig,
         direct_output: Arc<DirectVideoOutput>,

@@ -31,7 +31,10 @@ const STREAM_INPUT_POLL_INTERVAL: Duration = Duration::from_millis(4);
 pub(crate) const TARGET_FRAME_TIME: Duration = Duration::from_millis(16);
 
 pub async fn run(mut app: App) -> Result<()> {
+    crate::experimental::configure(&app.settings);
+    crate::experimental::pin_render();
     crate::streaming::video::reserve_decoder_cdram();
+    let mut performance_mode=None;
 
     let sdl = sdl2::init().map_err(anyhow::Error::msg)?;
     let video = sdl.video().map_err(anyhow::Error::msg)?;
@@ -165,6 +168,7 @@ pub async fn run(mut app: App) -> Result<()> {
             }
         }
         if interrupted {
+            performance_mode=None;
             overlay_cache=None;
             crate::native_input::disable();
             rear_touch_buttons = RearTouchButtons::default();
@@ -175,6 +179,7 @@ pub async fn run(mut app: App) -> Result<()> {
             direct_commands.clear();
         }
         if backgrounded {
+            performance_mode=None;
             overlay_cache=None;
             surface.reset_benchmark();
             crate::native_input::disable();
@@ -249,6 +254,9 @@ pub async fn run(mut app: App) -> Result<()> {
 
         app.tick().await?;
         let output = app.state.streaming().map(|s| s.direct_video_output());
+        let perf=output.is_some() && app.settings.lab_performance_clocks;
+        if perf && performance_mode.is_none(){performance_mode=Some(crate::experimental::PerformanceMode::engage());}
+        else if !perf{performance_mode=None;}
         let same = match (&audio_session_output, &output) {
             (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a,b),
             (None,None) => true, _ => false,

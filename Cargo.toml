@@ -1,6 +1,6 @@
 [package]
 name = "green-vita"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2024"
 
 [dependencies]
@@ -24,7 +24,7 @@ tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"] }
 unic-langid = "0.9"
 uuid = { version = "1", features = ["v4", "serde"] }
 vita-newlib-shims = "0.3"
-vitasdk-sys = { version = "0.3", features = ["SceAppUtil_stub", "SceKernelDmacMgr_stub", "SceKernelThreadMgr_stub", "SceLibKernel_stub", "SceVideodec_stub", "SceSysmem_stub", "SceSysmodule_stub"] }
+vitasdk-sys = { version = "0.3", features = ["SceAppUtil_stub", "ScePower_stub", "SceKernelDmacMgr_stub", "SceKernelThreadMgr_stub", "SceLibKernel_stub", "SceVideodec_stub", "SceSysmem_stub", "SceSysmodule_stub"] }
 
 [patch.crates-io]
 ring = { git = "https://github.com/vita-rust/ring.git", branch = "v0.17.14-vita" }
@@ -34,3 +34,7 @@ rtc-shared = { git = "https://github.com/Day-OS/rtc.git", branch = "vita" }
 title_id = "GREENVITA"
 title_name = "GreenVita"
 assets = "static"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1

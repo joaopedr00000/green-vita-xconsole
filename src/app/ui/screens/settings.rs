@@ -23,6 +23,7 @@ pub enum Command {
     SetStreamProfile(StreamProfile),
     SetCloudRegion(Option<String>),
     CycleNativeDeadzone,
+    ToggleLab(u8),
     CycleControl(usize),
     ResetControls,
 }
@@ -41,6 +42,7 @@ enum SettingsRow {
     StreamingProfile(StreamProfile),
     CloudRegion,
     NativeDeadzone,
+    Lab(u8),
     Control(usize),
     ResetControls,
     Back,
@@ -94,6 +96,7 @@ fn settings_rows(app: &App) -> Vec<SettingsRow> {
     ));
     rows.push(SettingsRow::HudPage);
     rows.push(SettingsRow::HudOpacity);
+    rows.extend((0..3).map(SettingsRow::Lab));
     rows.push(SettingsRow::NativeDeadzone);
     rows.extend((0..16).map(SettingsRow::Control));
     rows.push(SettingsRow::ResetControls);
@@ -315,6 +318,12 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
                 row_index+=1;
                 ui.small(if pt{"Recuperação adaptativa da fila de vídeo: automática."}else{"Adaptive video queue recovery: automatic."});
                 ui.separator();
+                ui.heading(if pt{"Laboratório 0.3.4"}else{"0.3.4 Lab"});
+                let labels=if pt{["Três texturas de vídeo","Decoder interno Low Delay","Frequências de desempenho"]}else{["Triple video textures","Internal Low Delay decoder","Performance clocks"]};
+                let values=[app.settings.lab_triple_buffer,app.settings.lab_internal_decoder,app.settings.lab_performance_clocks];
+                for (i,label) in labels.into_iter().enumerate(){if checkbox_row(ui,selected_index==row_index,values[i],label.to_owned()){commands.push(Command::ToggleLab(i as u8).into());}row_index+=1;}
+                ui.small(if pt{"Reconecte após alterar o decoder ou as texturas. Frequências opcionais podem aumentar o consumo."}else{"Reconnect after decoder or texture changes. Optional clocks may increase power use."});
+                ui.separator();
                 ui.heading(if pt { "Mapeamento dos controles" } else { "Controller mapping" });
                 ui.small(if pt{"Gamepad RAW: automático no Vita; SDL2 para compatibilidade."}else{"RAW gamepad: automatic on Vita; SDL2 compatibility fallback."});
                 if focus_row(ui, selected_index == row_index, format!("{}: {}% >", if pt { "Zona morta (nativa)" } else { "Native stick deadzone" },app.settings.native_deadzone_percent)) {
@@ -527,6 +536,7 @@ impl App {
             }
             SettingsRow::HudPage=>return self.handle_settings_command(Command::CycleHudPage),
             SettingsRow::HudOpacity=>return self.handle_settings_command(Command::CycleHudOpacity),
+            SettingsRow::Lab(i)=>return self.handle_settings_command(Command::ToggleLab(*i)),
             SettingsRow::NativeDeadzone => return self.handle_settings_command(Command::CycleNativeDeadzone),
             SettingsRow::Control(index) => return self.handle_settings_command(Command::CycleControl(*index)),
             SettingsRow::ResetControls => return self.handle_settings_command(Command::ResetControls),
@@ -620,6 +630,10 @@ impl App {
                 self.settings.stream_profile = profile;
                 crate::settings::set_active_stream_profile(profile);
                 self.settings.save();
+            }
+            Command::ToggleLab(i)=>{
+                match i{0=>self.settings.lab_triple_buffer=!self.settings.lab_triple_buffer,1=>self.settings.lab_internal_decoder=!self.settings.lab_internal_decoder,2=>self.settings.lab_performance_clocks=!self.settings.lab_performance_clocks,_=>{}}
+                crate::experimental::configure(&self.settings);self.settings.save();
             }
             Command::CycleNativeDeadzone => {
                 self.settings.native_deadzone_percent = match self.settings.native_deadzone_percent { 0=>4,4=>8,8=>12,12=>20,_=>0 };

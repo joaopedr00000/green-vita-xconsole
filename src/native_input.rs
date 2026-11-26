@@ -89,6 +89,7 @@ pub fn telemetry()->String{
     format!("native polls:{} repeat:{}% interval:{}/{}us edge_drop:{} dispatch N:{}us/{} S:{}us/{}",polls,repeats.saturating_mul(100).checked_div(polls).unwrap_or(0),INTERVAL_SUM.load(Ordering::Relaxed).checked_div(count).unwrap_or(0),INTERVAL_MAX.load(Ordering::Relaxed),EDGE_DROPS.load(Ordering::Relaxed),NATIVE_DELAY.load(Ordering::Relaxed).checked_div(n).unwrap_or(0),n,SDL_DELAY.load(Ordering::Relaxed).checked_div(s).unwrap_or(0),s)
 }
 fn run(){
+    crate::experimental::pin_input();
     let mut cache=HardwareCache::default();let mut generation_seen=u64::MAX;
     let mut previous_poll:Option<Instant>=None;let mut previous_timestamp=None;
     let mut fast_until=Instant::now();

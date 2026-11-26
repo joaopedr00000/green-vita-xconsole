@@ -175,3 +175,7 @@ mod audio_refill_tests{
     use super::*;
     #[test]fn period_required(){assert!(!audio_refill_sufficient(0,4096));assert!(!audio_refill_sufficient(4095,4096));assert!(audio_refill_sufficient(4096,4096));assert!(audio_refill_sufficient(8192,4096));assert!(!audio_refill_sufficient(4096,0));}
 }
+
+/// Find a target not owned by the renderer or the pending picture.
+pub fn free_texture(count:usize,displayed:Option<usize>,pending:Option<usize>)->Option<usize>{(0..count).find(|i|Some(*i)!=displayed && Some(*i)!=pending)}
+#[cfg(test)]mod triple_tests{use super::*;#[test]fn independent_targets(){assert_eq!(free_texture(3,Some(0),Some(1)),Some(2));assert_eq!(free_texture(2,Some(0),Some(1)),None);assert_eq!(free_texture(2,Some(0),None),Some(1));}}

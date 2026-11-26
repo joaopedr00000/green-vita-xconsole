@@ -53,6 +53,9 @@ pub(crate) struct RtcSession<B: RtcSessionBackend> {
     pub(crate) video: VideoReceiver,
     pub(crate) audio: AudioReceiver,
     last_keyframe_request: Option<Instant>,
+    last_decoded_at:Option<Instant>,
+    last_decoded_id:u64,
+    stall_pli_sent:bool,
     initial_video_watchdog_started_at: Option<Instant>,
     last_initial_video_keyframe_request: Option<Instant>,
     pub status: String,
@@ -80,6 +83,7 @@ impl<B: RtcSessionBackend> RtcSession<B> {
             video,
             audio: AudioReceiver::new(config.audio_sample_rate, config.audio_payload_type),
             last_keyframe_request: None,
+            last_decoded_at:None,last_decoded_id:0,stall_pli_sent:false,
             initial_video_watchdog_started_at: None,
             last_initial_video_keyframe_request: None,
             status: "Negotiating WebRTC connection".to_owned(),
@@ -134,6 +138,17 @@ impl<B: RtcSessionBackend> RtcSession<B> {
         if self.initial_video_keyframe_due(now) {
             eprintln!("No initial video RTP after WebRTC connected; requesting a keyframe");
             keyframe_requested = true;
+        }
+        // Only after actual video has been decoded. A silent lobby or SDP setup
+        // must not be mistaken for a frozen live session.
+        let decoded=self.video.decoded_frame_id();
+        if self.connection_state!=RTCPeerConnectionState::Connected{self.last_decoded_at=None;self.stall_pli_sent=false;}
+        else if decoded!=self.last_decoded_id || (decoded>0 && self.last_decoded_at.is_none()){
+            self.last_decoded_id=decoded;self.last_decoded_at=Some(now);self.stall_pli_sent=false;
+        }else if let Some(at)=self.last_decoded_at{
+            let elapsed=now.saturating_duration_since(at);
+            if elapsed>=Duration::from_secs(8){crate::diagnostics::step("video_watchdog","STALL_8S");self.close()?;self.connection_state=RTCPeerConnectionState::Closed;}
+            else if elapsed>=Duration::from_secs(4) && !self.stall_pli_sent{keyframe_requested=true;self.stall_pli_sent=true;crate::diagnostics::step("video_watchdog","PLI_4S");}
         }
         self.request_keyframe(keyframe_requested, now);
         if self.connection_state == RTCPeerConnectionState::Connected {
