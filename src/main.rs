@@ -6,6 +6,7 @@ mod app;
 mod diagnostics;
 mod i18n;
 mod input;
+mod native_input;
 mod jobs;
 mod safe_memory;
 mod settings;
@@ -46,6 +47,7 @@ mod fs_utils {
 
 fn main() -> anyhow::Result<()> {
     let _app_util = safe_memory::AppUtil::initialize()?;
+    diagnostics::initialize();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;

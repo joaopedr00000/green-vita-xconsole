@@ -3,6 +3,15 @@ use crate::app::{App, AppState};
 use anyhow::Result;
 
 impl App {
+    pub(crate) async fn interrupt_stream(&mut self) -> Result<()> {
+        crate::native_input::disable();
+        if self.state.streaming().is_some() { self.exit_stream().await; }
+        else if matches!(&self.state, AppState::StartingStream { .. } | AppState::Connecting { .. }) {
+            self.handle_connecting_input(crate::InputCommand::Back).await?;
+        }
+        Ok(())
+    }
+
     pub(in crate::app) async fn pump_rtc_session(&mut self) -> Result<()> {
         let Some(streaming) = self.state.streaming_mut() else {
             return Ok(());

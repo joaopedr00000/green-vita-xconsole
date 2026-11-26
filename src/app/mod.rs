@@ -37,6 +37,7 @@ pub struct App {
     pub(crate) title_initial_overlay: Option<TitleInitialOverlay>,
     pub(crate) title_search_query: String,
     pub(crate) title_search_requested: bool,
+    pub(crate) artwork_focus: Option<(String, Instant)>,
     /// At most one automatic stream rejoin per user-initiated launch.
     pub(crate) auto_reconnect_used: bool,
     pub(crate) release_update: Arc<Mutex<Option<String>>>,
@@ -64,6 +65,7 @@ impl App {
             title_initial_overlay: None,
             title_search_query: String::new(),
             title_search_requested: false,
+            artwork_focus: None,
             auto_reconnect_used: false,
             release_update,
             region_ping_ms: Arc::new(Mutex::new(HashMap::new())), 

@@ -72,7 +72,9 @@ impl App {
                         }
                         self.set_state(return_screen(target.kind, target.return_selected));
                     }
-                    AppState::Connecting { session, .. } => {
+                    AppState::Connecting { session, poll_job, wait_estimate_job } => {
+                        if let Some(job) = poll_job { job.abort(); }
+                        if let Some(job) = wait_estimate_job { job.abort(); }
                         let return_to = return_screen(session.kind, session.return_selected);
                         let session_id = session.stream.session_id.clone();
                         eprintln!("Cancelling connecting session {session_id}...");

@@ -108,6 +108,10 @@ impl StreamingSession {
 
     pub(crate) fn set_paused(&mut self, paused: bool) {
         self.paused = paused;
+        if paused {
+            crate::native_input::disable();
+            self.backend.send_gamepad_frame(GamepadFrame::default());
+        }
         self.hint_started_at = Instant::now();
     }
 
@@ -144,7 +148,13 @@ impl StreamingSession {
             std::mem::swap(&mut frame.left_shoulder, &mut frame.left_trigger);
             std::mem::swap(&mut frame.right_shoulder, &mut frame.right_trigger);
         }
+        frame.remap(&settings.control_map);
         self.backend.send_gamepad_frame(frame);
+    }
+
+    pub(crate) fn native_config(&self, settings: &Settings) -> crate::native_input::Config {
+        let swap = self.title_id.as_deref().and_then(|id| settings.game_profile(id)).is_some_and(|p| p.swap_shoulders_and_triggers);
+        crate::native_input::Config { rear: self.rear_touch_enabled(settings), front: self.front_touch_auxiliary_buttons(settings), swap, map: settings.control_map }
     }
 
     pub(crate) fn front_touch_auxiliary_buttons(&self, settings: &Settings) -> bool {
@@ -220,6 +230,8 @@ impl StreamingSession {
     }
 
     pub(super) async fn stop(self) -> Result<()> {
+        crate::native_input::disable();
+        self.backend.send_gamepad_frame(GamepadFrame::default());
         self.backend.stop().await
     }
 }

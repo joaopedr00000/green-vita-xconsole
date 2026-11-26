@@ -4,7 +4,7 @@ use crate::api::catalog::worker::{CatalogResult, ImageKind, clear_catalog_cache}
 use crate::api::catalog::{Game, GameDetails};
 use std::sync::Arc;
 
-const ICON_CACHE_RADIUS: usize = 16;
+const ICON_CACHE_RADIUS: usize = 8;
 const RESULTS_PER_TICK: usize = 2;
 
 impl App {
@@ -56,12 +56,16 @@ impl App {
             return;
         };
         let title_id = title.id.clone();
+        if self.artwork_focus.as_ref().is_none_or(|(id, _)| id != &title_id) {
+            self.artwork_focus = Some((title_id.clone(), std::time::Instant::now()));
+        }
 
         if title.details.is_none() {
             self.request_metadata_if_needed(&title_id, title.metadata_id.clone(), false);
             return;
         }
 
+        if self.artwork_focus.as_ref().is_some_and(|(_, at)| at.elapsed() < std::time::Duration::from_millis(500)) { return; }
         let title = &self.service.titles[selected];
         let details = title.details.as_ref().expect("title details checked above");
         let box_art_url = (title.box_art.is_none()

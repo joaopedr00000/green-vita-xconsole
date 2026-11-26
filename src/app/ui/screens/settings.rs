@@ -19,6 +19,9 @@ pub enum Command {
     SetShowStreamDebugInfo(bool),
     SetStreamProfile(StreamProfile),
     SetCloudRegion(Option<String>),
+    SetNativeInput(bool),
+    CycleControl(usize),
+    ResetControls,
 }
 
 #[derive(Clone)]
@@ -31,6 +34,9 @@ enum SettingsRow {
     StreamDebug(bool),
     StreamingProfile(StreamProfile),
     CloudRegion,
+    NativeInput,
+    Control(usize),
+    ResetControls,
     Back,
 }
 
@@ -78,6 +84,9 @@ fn settings_rows(app: &App) -> Vec<SettingsRow> {
     rows.push(SettingsRow::StreamDebug(
         app.settings.show_stream_debug_info,
     ));
+    rows.push(SettingsRow::NativeInput);
+    rows.extend((0..16).map(SettingsRow::Control));
+    rows.push(SettingsRow::ResetControls);
     rows.push(SettingsRow::Back);
     rows
 }
@@ -281,6 +290,24 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
                 }
                 row_index += 1;
 
+                ui.separator();
+                ui.heading("Controller mapping");
+                if checkbox_row(ui, selected_index == row_index, app.settings.native_input_worker, "Independent native input (experimental)".to_owned()) {
+                    commands.push(Command::SetNativeInput(!app.settings.native_input_worker).into());
+                }
+                row_index += 1;
+                let labels = crate::streaming::input::CONTROL_LABELS;
+                for index in 0..16 {
+                    let target = labels.get(app.settings.control_map[index] as usize).unwrap_or(&"Disabled");
+                    if focus_row(ui, selected_index == row_index, format!("{} → {} >", labels[index], target)) {
+                        commands.push(Command::CycleControl(index).into());
+                    }
+                    row_index += 1;
+                }
+                if focus_row(ui, selected_index == row_index, "Restore default controls") {
+                    commands.push(Command::ResetControls.into());
+                }
+                row_index += 1;
                 ui.add_space(8.0);
                 ui.small(i18n.text("settings-wifi-turbo-hint"));
                 if let Some(version) = app.release_update.lock().ok().and_then(|v| v.clone()) {
@@ -470,6 +497,9 @@ impl App {
             SettingsRow::StreamDebug(enabled) => {
                 return self.handle_settings_command(Command::SetShowStreamDebugInfo(!enabled));
             }
+            SettingsRow::NativeInput => return self.handle_settings_command(Command::SetNativeInput(!self.settings.native_input_worker)),
+            SettingsRow::Control(index) => return self.handle_settings_command(Command::CycleControl(*index)),
+            SettingsRow::ResetControls => return self.handle_settings_command(Command::ResetControls),
             SettingsRow::Back => {}
         }
 
@@ -555,6 +585,18 @@ impl App {
             Command::SetStreamProfile(profile) => {
                 self.settings.stream_profile = profile;
                 crate::settings::set_active_stream_profile(profile);
+                self.settings.save();
+            }
+            Command::SetNativeInput(enabled) => {
+                self.settings.native_input_worker = enabled;
+                self.settings.save();
+            }
+            Command::CycleControl(index) => {
+                if let Some(target) = self.settings.control_map.get_mut(index) { *target = ((*target as u16 + 1) % 17) as u8; }
+                self.settings.save();
+            }
+            Command::ResetControls => {
+                self.settings.control_map = crate::streaming::input::default_control_map();
                 self.settings.save();
             }
             Command::SetShowStreamDebugInfo(enabled) => {

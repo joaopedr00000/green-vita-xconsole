@@ -220,6 +220,10 @@ impl AudioRenderer {
         }
     }
 
+    pub fn clear_session(&mut self) {
+        self.restart_decode_worker();
+    }
+
     fn restart_decode_worker(&mut self) {
         self.queue.pause();
         self.queue.clear();

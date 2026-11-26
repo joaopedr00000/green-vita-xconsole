@@ -151,6 +151,8 @@ fn run_decode_loop(
     direct_output: Arc<DirectVideoOutput>,
 ) {
     let mut decoder = Some(initial_decoder);
+    metrics::METRICS.compressed_queue_depth.store(0, Ordering::Relaxed);
+    metrics::METRICS.compressed_queue_age_us.store(0, Ordering::Relaxed);
 
     loop {
         select_biased! {
@@ -163,6 +165,8 @@ fn run_decode_loop(
             },
             recv(access_units) -> access_unit => {
                 let Ok(access_unit) = access_unit else { break };
+                metrics::METRICS.compressed_queue_depth.store(access_units.len() as u64, Ordering::Relaxed);
+                metrics::METRICS.compressed_queue_age_us.store(access_unit.queued_at.elapsed().as_micros() as u64, Ordering::Relaxed);
                 decode_queued_access_unit(
                     &mut decoder,
                     config,

@@ -56,11 +56,16 @@ pub async fn run(mut app: App) -> Result<()> {
     let mut last_direction_repeat_at = Instant::now();
     let mut vita_ime_active = false;
     let mut vita_ime_pending = None;
+    let mut last_network_check = Instant::now();
+    let mut network_was_connected = false;
+    let mut backgrounded = false;
+    let mut audio_session_active = false;
 
     loop {
         let loop_started_at = Instant::now();
         let mut egui_events = Vec::new();
         let mut direct_commands = Vec::new();
+        let mut interrupted = false;
         if app.title_search_requested && !vita_ime_active {
             app.title_search_requested = false;
             vita_ime_pending = None;
@@ -69,6 +74,11 @@ pub async fn run(mut app: App) -> Result<()> {
         }
 
         for event in event_pump.poll_iter() {
+            match &event {
+                Event::AppWillEnterBackground | Event::AppDidEnterBackground => { backgrounded = true; interrupted = true; },
+                Event::AppWillEnterForeground | Event::AppDidEnterForeground => { backgrounded = false; interrupted = true; },
+                _ => {}
+            }
             rear_touch_buttons.handle_event(&event);
             let ime_owned_event = vita_ime_active;
             if ime_owned_event {
@@ -133,6 +143,27 @@ pub async fn run(mut app: App) -> Result<()> {
             }
         }
 
+        if last_network_check.elapsed() >= Duration::from_millis(500) {
+            last_network_check = Instant::now();
+            if let Some(connected) = network_connected() {
+                if network_was_connected && !connected { interrupted = true; }
+                network_was_connected = connected;
+            }
+        }
+        if interrupted {
+            crate::native_input::disable();
+            rear_touch_buttons = RearTouchButtons::default();
+            back_hold_since = None;
+            audio_renderer.clear_session();
+            crate::diagnostics::step("session_lifecycle", "INTERRUPTED");
+            app.interrupt_stream().await?;
+            direct_commands.clear();
+        }
+        if backgrounded {
+            crate::native_input::disable();
+            sleep(Duration::from_millis(50)).await;
+            continue;
+        }
         if vita_ime_active
             && !video
                 .text_input()
@@ -200,6 +231,14 @@ pub async fn run(mut app: App) -> Result<()> {
         );
 
         app.tick().await?;
+        let active = app.state.streaming().is_some();
+        if audio_session_active && !active { audio_renderer.clear_session(); }
+        audio_session_active = active;
+        let native_config = match &app.state {
+            AppState::Streaming(s) if !s.paused && app.settings.native_input_worker => Some(s.native_config(&app.settings)),
+            _ => None,
+        };
+        crate::native_input::configure(native_config);
         if let Some(streaming) = app.state.streaming_mut() {
             audio_renderer.submit_packets(streaming.take_audio_packets());
         }
@@ -233,6 +272,7 @@ pub async fn run(mut app: App) -> Result<()> {
         for command in ui_commands {
             app.handle_command(command).await?;
         }
+        if !matches!(&app.state, AppState::Streaming(s) if !s.paused) { crate::native_input::disable(); }
 
         surface.draw_scene(matches!(&app.state, AppState::Streaming(_)))?;
         let clipped_primitives =
@@ -317,3 +357,13 @@ fn send_stream_gamepad_state(
     frame.view = f32::from(relay_back_as_view);
     streaming.send_gamepad_frame(frame, settings);
 }
+
+#[cfg(target_os="vita")]
+fn network_connected() -> Option<bool> {
+    #[link(name="SceNetCtl_stub", kind="static")]
+    unsafe extern "C" { fn sceNetCtlInetGetState(state:*mut i32)->i32; }
+    let mut state = 0;
+    (unsafe { sceNetCtlInetGetState(&mut state) } >= 0).then_some(state == 3)
+}
+#[cfg(not(target_os="vita"))]
+fn network_connected() -> Option<bool> { None }

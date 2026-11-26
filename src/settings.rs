@@ -149,6 +149,8 @@ pub struct Settings {
     /// Only a host returned in the signed-in account's regional allowlist is accepted.
     pub preferred_cloud_region: Option<String>,
     pub game_profiles: HashMap<String, GameProfile>,
+    pub control_map: [u8; 16],
+    pub native_input_worker: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,6 +182,8 @@ impl Default for Settings {
             stream_profile: StreamProfile::Quality,
             preferred_cloud_region: None,
             game_profiles: HashMap::new(),
+            control_map: crate::streaming::input::default_control_map(),
+            native_input_worker: false,
         }
     }
 }

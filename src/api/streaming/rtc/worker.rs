@@ -252,10 +252,15 @@ async fn run_session<B: super::session::RtcSessionBackend>(
             active_gamepad_pulse = Some((frame, Instant::now() + GAMEPAD_PULSE_DURATION));
         }
 
-        let latest = latest_gamepad
+        let mut latest = latest_gamepad
             .lock()
             .ok()
             .and_then(|mut latest| latest.take());
+        if latest.as_ref().is_none_or(|s| s.frame.view == 0.0) {
+            if let Some((frame, sampled_at)) = crate::native_input::latest() {
+                latest = Some(SampledGamepadFrame { frame, sampled_at });
+            }
+        }
         if let Some(sampled) = latest.as_ref() {
             last_input_sample = sampled.sampled_at;
             stale_released = false;
