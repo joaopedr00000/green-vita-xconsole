@@ -87,7 +87,10 @@ impl VideoDecodeWorker {
             .saturating_mul((MAX_PENDING_ACCESS_UNITS - MIN_PENDING_ACCESS_UNITS) as u64)
             .saturating_add(12)
             / 25;
-        let pending_limit = MIN_PENDING_ACCESS_UNITS + extra_capacity as usize;
+        let pending_limit = crate::streaming::policy::decoder_queue_limit(
+            MIN_PENDING_ACCESS_UNITS + extra_capacity as usize,
+            crate::settings::active_stream_profile() == crate::settings::StreamProfile::Quality,
+        ).min(MAX_PENDING_ACCESS_UNITS);
         if self.access_units.len() >= pending_limit {
             metrics::METRICS.queue_full.fetch_add(1, Ordering::Relaxed);
             return false;
@@ -151,6 +154,7 @@ fn run_decode_loop(
     direct_output: Arc<DirectVideoOutput>,
 ) {
     let mut decoder = Some(initial_decoder);
+    let mut blocked_generation = None;
     metrics::METRICS.compressed_queue_depth.store(0, Ordering::Relaxed);
     metrics::METRICS.compressed_queue_age_us.store(0, Ordering::Relaxed);
 
@@ -169,6 +173,7 @@ fn run_decode_loop(
                 metrics::METRICS.compressed_queue_age_us.store(access_unit.queued_at.elapsed().as_micros() as u64, Ordering::Relaxed);
                 decode_queued_access_unit(
                     &mut decoder,
+                    &mut blocked_generation,
                     config,
                     &generation,
                     &latest_result,
@@ -184,6 +189,7 @@ fn run_decode_loop(
 
 fn decode_queued_access_unit(
     decoder: &mut Option<HwVideoDecoder>,
+    blocked_generation: &mut Option<u64>,
     config: DecoderConfig,
     generation: &AtomicU64,
     latest_result: &Mutex<Option<DecodeResult>>,
@@ -192,7 +198,7 @@ fn decode_queued_access_unit(
     direct_output: &DirectVideoOutput,
     queued_more: bool,
 ) {
-    if access_unit.generation != generation.load(Ordering::Acquire) {
+    if access_unit.generation != generation.load(Ordering::Acquire) || *blocked_generation == Some(access_unit.generation) {
         return;
     }
 
@@ -200,6 +206,7 @@ fn decode_queued_access_unit(
         match HwVideoDecoder::new(config) {
             Ok(new_decoder) => *decoder = Some(new_decoder),
             Err(error) => {
+                *blocked_generation = Some(access_unit.generation);
                 publish_result(
                     latest_result,
                     result_ready,
@@ -219,6 +226,8 @@ fn decode_queued_access_unit(
         // Do not decode until the renderer has registered its two GXM textures. There is no
         // legacy output buffer to copy from anymore.
         metrics::METRICS.skipped.fetch_add(1, Ordering::Relaxed);
+        *blocked_generation = Some(access_unit.generation);
+        publish_result(latest_result, result_ready, Err("no registered video texture; reference recovery required".to_owned()));
         return;
     };
     // Measure the hardware call and contain an unexpected decoder panic inside its worker.
@@ -234,6 +243,7 @@ fn decode_queued_access_unit(
         Ordering::Relaxed,
     );
     if access_unit.generation != generation.load(Ordering::Acquire) {
+        direct_target.invalidate();
         return;
     }
 
@@ -258,11 +268,15 @@ fn decode_queued_access_unit(
         }
         Ok(Ok(false)) => {}
         Ok(Err(error)) => {
+            direct_target.invalidate();
+            *blocked_generation = Some(access_unit.generation);
             *decoder = None;
             publish_result(latest_result, result_ready, Err(error.to_string()));
         }
         Err(_) => {
-            eprintln!("H264 decoder panicked; recreating decoder on next frame");
+            direct_target.invalidate();
+            *blocked_generation = Some(access_unit.generation);
+            eprintln!("H264 decoder panicked; waiting for recovery frame");
             *decoder = None;
             publish_result(
                 latest_result,

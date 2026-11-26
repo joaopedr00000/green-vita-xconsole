@@ -16,17 +16,17 @@ const MAX_PENDING_AUDIO_PACKETS: usize = 32;
 // Allow brief cross-frame reordering while RTCP NACK asks for missing RTP.
 // Bounded to roughly two frames so Vita latency stays low.
 const DEFAULT_VIDEO_REORDER_GRACE: std::time::Duration = std::time::Duration::from_millis(32);
-const MAX_HELD_FUTURE_PACKETS: usize = 48;
+const MAX_HELD_FUTURE_PACKETS: usize = 192;
 const MAX_H264_ACCESS_UNIT_BYTES: usize = 2 * 1024 * 1024;
 const VIDEO_RTP_CLOCK_RATE: u32 = 90_000;
 const AUDIO_MAX_LATE_PACKETS: u16 = 32;
-const LOW_FPS_DAMAGE_LIMIT: u8 = 8;
-const HIGH_FPS_DAMAGE_LIMIT: u8 = 3;
+
 
 #[derive(Default)]
 pub(super) struct VideoSampleStats {
     pub dropped: u32,
     pub recovered_after_wait: u32,
+    pub dependent_dropped: u32,
     pub source_frame_duration_us: Option<u64>,
     pub encoded_resolution: Option<(u32, u32)>,
 }
@@ -35,6 +35,7 @@ impl VideoSampleStats {
     fn merge(&mut self, other: Self) {
         self.dropped = self.dropped.saturating_add(other.dropped);
         self.recovered_after_wait = self.recovered_after_wait.saturating_add(other.recovered_after_wait);
+        self.dependent_dropped = self.dependent_dropped.saturating_add(other.dependent_dropped);
         if other.source_frame_duration_us.is_some() {
             self.source_frame_duration_us = other.source_frame_duration_us;
         }
@@ -79,7 +80,6 @@ pub(super) struct VideoRtp {
     next_sequence: Option<u16>,
     last_frame_timestamp: Option<u32>,
     source_frame_duration_us: Option<u64>,
-    damage_score: u8,
     stream_too_large: bool,
     waiting_for_keyframe: bool,
     held_future: Vec<Packet>,
@@ -179,7 +179,6 @@ impl VideoRtp {
             next_sequence: None,
             last_frame_timestamp: None,
             source_frame_duration_us: None,
-            damage_score: 0,
             stream_too_large: false,
             waiting_for_keyframe: false,
             held_future: Vec::new(),
@@ -189,7 +188,7 @@ impl VideoRtp {
 
     /// Clamp user profile + measured jitter to avoid unsafe zero-delay H264 reordering.
     pub(super) fn set_reorder_grace_ms(&mut self, delay_ms: u64) {
-        self.reorder_grace = std::time::Duration::from_millis(delay_ms.clamp(16, 48));
+        self.reorder_grace = std::time::Duration::from_millis(delay_ms.clamp(16, 96));
     }
 
     pub(super) fn waiting_for_keyframe(&self) -> bool {
@@ -198,6 +197,10 @@ impl VideoRtp {
 
     pub(super) fn wait_for_keyframe(&mut self) {
         self.waiting_for_keyframe = true;
+        self.pending = None;
+        self.held_future.clear();
+        self.next_sequence = None;
+        self.depacketizer = H264Packet::default();
     }
 
     /// Keep a small frame lookahead when a newer timestamp arrives before
@@ -214,7 +217,7 @@ impl VideoRtp {
             && pending.timestamp != packet.header.timestamp
             && timestamp_is_newer(packet.header.timestamp, pending.timestamp) {
             if pending.first_packet_at.elapsed() < self.reorder_grace
-                && self.held_future.len() < MAX_HELD_FUTURE_PACKETS
+                && self.held_future.len() < crate::streaming::policy::reorder_packet_limit(self.reorder_grace.as_millis() as u64).min(MAX_HELD_FUTURE_PACKETS)
                 && self.held_future.first().is_none_or(|item|
                     item.header.timestamp == packet.header.timestamp)
             {
@@ -248,7 +251,6 @@ impl VideoRtp {
         keyframe_requested: &mut bool,
     ) -> VideoSampleStats {
         let mut stats = VideoSampleStats::default();
-        let mut frame_was_damaged = false;
         if packet.payload.is_empty() {
             if self.next_sequence == Some(packet.header.sequence_number) {
                 self.next_sequence = Some(packet.header.sequence_number.wrapping_add(1));
@@ -270,7 +272,6 @@ impl VideoRtp {
                 self.depacketizer = H264Packet::default();
                 *keyframe_requested = true;
                 self.record_damage(worker);
-                frame_was_damaged = true;
                 stats.dropped = stats.dropped.saturating_add(1);
             }
         }
@@ -369,55 +370,32 @@ impl VideoRtp {
             }
             self.stream_too_large = false;
         }
-        if self.waiting_for_keyframe {
-            // Later keyframes may contain only IDR; AVCDEC retains SPS/PPS across resyncs.
-            if !unit.has_idr {
-                *keyframe_requested = true;
-                stats.dropped = stats.dropped.saturating_add(1);
-                return stats;
-            }
-            self.waiting_for_keyframe = false;
-            self.damage_score = 0;
-        } else if !frame_was_damaged {
-            self.damage_score = self.damage_score.saturating_sub(1);
+        if self.waiting_for_keyframe && !unit.has_idr {
+            *keyframe_requested = true;
+            // These are intentionally suppressed dependent pictures, not new packet losses.
+            stats.dependent_dropped = stats.dependent_dropped.saturating_add(1);
+            return stats;
         }
 
         if !worker.submit_access_unit(data.to_vec(), self.source_frame_duration_us) {
-            eprintln!("Video decoder queue is full; continuing while requesting a keyframe");
             *keyframe_requested = true;
             stats.dropped = stats.dropped.saturating_add(1);
+            self.record_damage(worker);
+        } else if self.waiting_for_keyframe {
+            self.waiting_for_keyframe = false;
+            crate::diagnostics::step("h264_recovery", "IDR_QUEUED");
         }
         stats
     }
 
     fn record_damage(&mut self, worker: &VideoDecodeWorker) {
-        if self.waiting_for_keyframe {
-            return;
+        // Any missing compressed access unit may be a reference. Freeze the last
+        // displayed picture rather than feeding dependent frames into corrupted DPB.
+        if !self.waiting_for_keyframe {
+            worker.begin_resync();
+            self.waiting_for_keyframe = true;
+            crate::diagnostics::step("h264_recovery", "REFERENCE_CHAIN_INTERRUPTED");
         }
-
-        self.damage_score = self.damage_score.saturating_add(1);
-        let source_fps = self
-            .source_frame_duration_us
-            .filter(|duration| *duration > 0)
-            .map(|duration| 1_000_000 / duration)
-            .unwrap_or(30);
-        let damage_limit = if source_fps <= 30 {
-            LOW_FPS_DAMAGE_LIMIT
-        } else if source_fps >= 60 {
-            HIGH_FPS_DAMAGE_LIMIT
-        } else {
-            LOW_FPS_DAMAGE_LIMIT
-                - (((source_fps - 30) * u64::from(LOW_FPS_DAMAGE_LIMIT - HIGH_FPS_DAMAGE_LIMIT)
-                    + 29)
-                    / 30) as u8
-        };
-        if self.damage_score < damage_limit {
-            return;
-        }
-
-        worker.begin_resync();
-        self.waiting_for_keyframe = true;
-        self.damage_score = 0;
     }
 }
 

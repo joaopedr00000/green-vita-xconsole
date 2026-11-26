@@ -84,7 +84,7 @@ pub(crate) fn video_resolution(width: u32, height: u32) {
 }
 
 /// Only aggregate numeric measurements produced locally, never remote text.
-pub(crate) fn metrics(rx_kbps: u64, jitter_us: u64, gaps: u64, late: u64, drops: u64, errors: u64) {
+pub(crate) fn metrics(rx_kbps: u64, jitter_us: u64, gaps: u64, late: u64, drops: u64, errors: u64, dependent: u64, requested_kbps: u64, waiting: bool) {
     // HUD remains live; disk telemetry is sampled only once per five seconds.
     let Ok(mut last) = LAST_METRIC.try_lock() else { return; };
     if last.is_some_and(|at| at.elapsed() < Duration::from_secs(5)) { return; }
@@ -92,7 +92,7 @@ pub(crate) fn metrics(rx_kbps: u64, jitter_us: u64, gaps: u64, late: u64, drops:
     drop(last);
     let m = &crate::streaming::video::metrics::METRICS;
     write_record("stream_metrics", &format!(
-        "rx_kbps={rx_kbps} jitter_us={jitter_us} gaps={gaps} late={late} drops={drops} errors={errors} input_us={} display_us={} pipe_us={} audio_ms={} audio_drops={}",
+        "rx_kbps={rx_kbps} requested_kbps={requested_kbps} jitter_us={jitter_us} gaps={gaps} late={late} drops={drops} errors={errors} dependent={dependent} waiting={waiting} input_us={} display_us={} pipe_us={} audio_ms={} audio_drops={}",
         m.input_dispatch_us.load(Ordering::Relaxed), m.display_queue_us.load(Ordering::Relaxed),
         m.total_video_pipeline_us.load(Ordering::Relaxed), m.audio_target_ms.load(Ordering::Relaxed),
         m.audio_drops.load(Ordering::Relaxed)));

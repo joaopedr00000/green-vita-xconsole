@@ -131,6 +131,9 @@ impl<B: RtcSessionBackend> RtcSession<B> {
             eprintln!("No initial video RTP after WebRTC connected; requesting a keyframe");
             keyframe_requested = true;
         }
+        // Keep requesting a recovery picture at the existing rate limit even
+        // when no new RTP arrives. Never silently stop after one lost PLI.
+        keyframe_requested |= self.connection_state == RTCPeerConnectionState::Connected && self.video.awaiting_keyframe();
         self.request_keyframe(keyframe_requested, now);
         if self.connection_state == RTCPeerConnectionState::Connected {
             self.video.request_nack(&mut self.peer, now);

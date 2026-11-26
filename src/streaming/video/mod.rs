@@ -120,6 +120,11 @@ pub(super) struct DirectVideoTargetGuard<'a> {
 }
 
 impl DirectVideoTargetGuard<'_> {
+    /// A failed hardware decode may have touched an unpresented texture.
+    /// Never let the renderer claim that stale generation after an error.
+    pub(super) fn invalidate(mut self) {
+        if self.state.pending.is_some_and(|(index, _)| index == self.index) { self.state.pending = None; }
+    }
     pub(super) fn publish(mut self) -> (usize, u64) {
         self.state.next_generation = self.state.next_generation.wrapping_add(1);
         let generation = self.state.next_generation;

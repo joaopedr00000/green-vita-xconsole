@@ -23,6 +23,7 @@ const NACK_EXPIRY: Duration = Duration::from_millis(180);
 struct VideoStats {
     dropped: u64,
     decode_errors: u64,
+    dependent_dropped: u64,
     rx_payload_bytes: u64,
     nack_requests: u64,
     nack_packets: u64,
@@ -136,6 +137,7 @@ impl VideoReceiver {
         self.bitrate.packet_received();
         let sample_stats = self.rtp.receive(&self.decoder, packet, keyframe_requested);
         self.reorder_saved = self.reorder_saved.saturating_add(sample_stats.recovered_after_wait);
+        self.stats.dependent_dropped = self.stats.dependent_dropped.saturating_add(sample_stats.dependent_dropped as u64);
         self.stats.dropped = self
             .stats
             .dropped
@@ -295,6 +297,8 @@ impl VideoReceiver {
         }
     }
 
+    pub(crate) fn awaiting_keyframe(&self) -> bool { self.rtp.waiting_for_keyframe() }
+
     pub(crate) fn request_keyframe(&self, peer: &mut RTCPeerConnection) {
         // A PLI needs both identifiers recorded when the remote video track was opened.
         if let (Some(receiver_id), Some(ssrc)) = (self.receiver_id, self.ssrc)
@@ -331,7 +335,7 @@ impl VideoReceiver {
         }
         self.last_status_damage = (self.stats.dropped, self.stats.decode_errors);
 
-        crate::diagnostics::metrics((rx_mbps * 1000.0) as u64, self.jitter_us, self.stats.detected_sequence_gaps, self.stats.recovered_or_late_packets, self.stats.dropped, self.stats.decode_errors);
+        crate::diagnostics::metrics((rx_mbps * 1000.0) as u64, self.jitter_us, self.stats.detected_sequence_gaps, self.stats.recovered_or_late_packets, self.stats.dropped, self.stats.decode_errors, self.stats.dependent_dropped, (self.bitrate.current_mbps() * 1000.0) as u64, self.rtp.waiting_for_keyframe());
         let performance = crate::streaming::video::video_performance_summary();
         let source_fps = self
             .stats
@@ -345,7 +349,7 @@ impl VideoReceiver {
             .map(|(width, height)| format!("{width}x{height}"))
             .unwrap_or_else(|| "?".to_owned());
         Some(format!(
-            "enc:{encoded_resolution} srcfps:{source_fps} {performance} rx:{rx_mbps:.1}Mbps remb:{:.1}Mbps jitter:{}ms gaps:{} late:{} nack:{}/{} reorder:{}ms wait:{} drop:{} err:{}",
+            "enc:{encoded_resolution} srcfps:{source_fps} {performance} rx:{rx_mbps:.1}Mbps remb:{:.1}Mbps jitter:{}ms gaps:{} late:{} nack:{}/{} reorder:{}ms wait:{} drop:{} dep:{} err:{}",
             self.bitrate.current_mbps(),
             self.jitter_us / 1_000,
             self.stats.detected_sequence_gaps,
@@ -355,6 +359,7 @@ impl VideoReceiver {
             self.reorder_ms.max(crate::streaming::policy::jitter_floor(reorder_bounds(self.profile).0, reorder_bounds(self.profile).1, if self.profile == StreamProfile::LowLatency { self.jitter_us / 2 } else { self.jitter_us })),
             u8::from(self.rtp.waiting_for_keyframe()),
             self.stats.dropped,
+            self.stats.dependent_dropped,
             self.stats.decode_errors,
         ))
     }
@@ -389,5 +394,5 @@ impl AudioReceiver {
 }
 
 fn reorder_bounds(profile: StreamProfile) -> (u64,u64) {
-    match profile { StreamProfile::LowLatency => (16,24), StreamProfile::Balanced => (24,40), StreamProfile::Quality => (32,48) }
+    match profile { StreamProfile::LowLatency => (16,24), StreamProfile::Balanced => (24,40), StreamProfile::Quality => (48,96) }
 }
