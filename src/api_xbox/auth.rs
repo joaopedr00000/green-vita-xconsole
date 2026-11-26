@@ -13,13 +13,16 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// A public example Xbox One Edge UA, not hardware authentication.
 const XBOX_ONE_USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; Xbox; Xbox One) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edge/44.18363.8131";
-const TOKEN_STORE_VERSION: u8 = 1;
+const TOKEN_STORE_VERSION: u8 = 2;
+const TOKEN_STORE_BACKUP: &str = "ux0:data/xcloud-rust/xcloud-tokens.backup";
+const TOKEN_STORE_STAGE: &str = "ux0:data/xcloud-rust/xcloud-tokens.stage";
 const TOKEN_KEY_MAGIC: &[u8; 8] = b"GVTKEY01";
 const TOKEN_KEY_SIZE: usize = 32;
 const TOKEN_KEY_RECORD_SIZE: usize = TOKEN_KEY_MAGIC.len() + TOKEN_KEY_SIZE;
 const TOKEN_KEY_OFFSET: i64 = 0;
 const TOKEN_NONCE_SIZE: usize = 12;
 const TOKEN_AAD: &[u8] = b"green-vita/xcloud-refresh-token/v1";
+const TOKEN_AAD_V2: &[u8] = b"green-vita/xcloud-refresh-token/v2/aes-256-gcm";
 
 #[derive(Debug, Clone)]
 pub struct EndpointCredentials {
@@ -211,19 +214,22 @@ impl MsalAuth {
     pub fn new() -> Self {
         let _ = ensure_token_store_dir();
         let refresh_token = match load_saved_refresh_token() {
-            Ok(Some(SavedRefreshToken::Encrypted(token))) => Some(token),
+            Ok(Some(SavedRefreshToken::Encrypted(token, version))) => {
+                if version != TOKEN_STORE_VERSION && persist_refresh_token(&token).is_err() {
+                    crate::diagnostics::step("token_vault", "MIGRATION_RETAINED");
+                }
+                Some(token)
+            },
             Ok(Some(SavedRefreshToken::Legacy(token))) => {
-                // Never leave the old plaintext token behind, even if Safe Memory is unavailable.
-                let _ = std::fs::remove_file(TOKEN_STORE_PATH);
-                if let Err(error) = persist_refresh_token(&token) {
-                    eprintln!("Could not migrate saved xCloud login encryption: {error:#}");
+                // Keep the existing login until the encrypted replacement is authenticated.
+                if persist_refresh_token(&token).is_err() {
+                    crate::diagnostics::step("token_vault", "MIGRATION_RETAINED");
                 }
                 Some(token)
             }
             Ok(None) => None,
-            Err(error) => {
-                eprintln!("Could not load encrypted xCloud login; clearing it: {error:#}");
-                let _ = std::fs::remove_file(TOKEN_STORE_PATH);
+            Err(_) => {
+                crate::diagnostics::step("token_vault", "READ_FAILED_PRESERVED");
                 None
             }
         };
@@ -256,7 +262,9 @@ impl MsalAuth {
 
     fn clear_saved_login(&mut self) {
         self.refresh_token = None;
-        let _ = std::fs::remove_file(TOKEN_STORE_PATH);
+        for path in [TOKEN_STORE_PATH, TOKEN_STORE_BACKUP, TOKEN_STORE_STAGE] {
+            let _ = std::fs::remove_file(path);
+        }
         if let Err(error) = clear_token_key() {
             eprintln!("Could not clear xCloud login key from Safe Memory: {error:#}");
         }
@@ -625,31 +633,89 @@ fn ensure_token_store_dir() -> Result<()> {
 }
 
 enum SavedRefreshToken {
-    Encrypted(String),
+    Encrypted(String, u8),
     Legacy(String),
 }
 
-fn load_saved_refresh_token() -> Result<Option<SavedRefreshToken>> {
-    let file = match std::fs::File::open(TOKEN_STORE_PATH) {
+fn read_token_at(path: &str) -> Result<Option<SavedRefreshToken>> {
+    let file = match std::fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).context("failed to open xCloud token store"),
+        Err(error) => return Err(error).context("failed to open token vault"),
     };
-    match serde_json::from_reader::<_, StoredTokenData>(file)
-        .context("failed to parse xCloud token store")?
-    {
-        StoredTokenData::Encrypted(data) => decrypt_refresh_token(&data)
-            .map(SavedRefreshToken::Encrypted)
-            .map(Some),
+    match serde_json::from_reader::<_, StoredTokenData>(file).context("invalid token vault")? {
+        StoredTokenData::Encrypted(data) => {
+            let version = data.version;
+            Ok(Some(SavedRefreshToken::Encrypted(decrypt_refresh_token(&data)?, version)))
+        }
         StoredTokenData::Legacy(data) => Ok(Some(SavedRefreshToken::Legacy(data.refresh_token))),
     }
 }
 
+fn load_saved_refresh_token() -> Result<Option<SavedRefreshToken>> {
+    match read_token_at(TOKEN_STORE_PATH) {
+        Ok(Some(token)) => {
+            // The primary was authenticated (or is an intact legacy record).
+            // Retain backups until an encrypted primary has been verified.
+            if matches!(&token, SavedRefreshToken::Encrypted(_, 2)) {
+                let _ = std::fs::remove_file(TOKEN_STORE_BACKUP);
+                let _ = std::fs::remove_file(TOKEN_STORE_STAGE);
+            }
+            Ok(Some(token))
+        }
+        primary => match read_token_at(TOKEN_STORE_BACKUP) {
+            Ok(Some(token)) => {
+                crate::diagnostics::step("token_vault", "BACKUP_RECOVERED");
+                Ok(Some(token))
+            }
+            _ => primary,
+        },
+    }
+}
+
 fn persist_refresh_token(refresh_token: &str) -> Result<()> {
+    use std::io::Write;
     let data = encrypt_refresh_token(refresh_token)?;
     ensure_token_store_dir()?;
-    crate::fs_utils::write_file_truncating(TOKEN_STORE_PATH, serde_json::to_string_pretty(&data)?)
-        .context("failed to persist encrypted xCloud login token")
+    let _ = std::fs::remove_file(TOKEN_STORE_STAGE);
+    {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true)
+            .open(TOKEN_STORE_STAGE).context("open staged vault")?;
+        file.write_all(&serde_json::to_vec(&data)?)?;
+        file.sync_all()?;
+    }
+    verify_token_at(TOKEN_STORE_STAGE, refresh_token)?;
+    // Prefer atomic replacement. On filesystems that reject overwrite-renames,
+    // preserve the existing file as a recoverable backup before installing.
+    if std::fs::rename(TOKEN_STORE_STAGE, TOKEN_STORE_PATH).is_err() {
+        if std::path::Path::new(TOKEN_STORE_PATH).exists() {
+            if std::path::Path::new(TOKEN_STORE_BACKUP).exists() {
+                // Never remove the only previously valid backup.
+                if read_token_at(TOKEN_STORE_PATH).ok().flatten().is_none() {
+                    bail!("primary invalid; existing recovery backup retained");
+                }
+                std::fs::remove_file(TOKEN_STORE_BACKUP)?;
+            }
+            std::fs::rename(TOKEN_STORE_PATH, TOKEN_STORE_BACKUP)?;
+        }
+        if let Err(error) = std::fs::rename(TOKEN_STORE_STAGE, TOKEN_STORE_PATH) {
+            if !std::path::Path::new(TOKEN_STORE_PATH).exists() {
+                let _ = std::fs::rename(TOKEN_STORE_BACKUP, TOKEN_STORE_PATH);
+            }
+            return Err(error).context("install staged vault");
+        }
+    }
+    verify_token_at(TOKEN_STORE_PATH, refresh_token)?;
+    let _ = std::fs::remove_file(TOKEN_STORE_BACKUP);
+    crate::diagnostics::step("token_vault", "VERIFIED_AES256_GCM");
+    Ok(())
+}
+
+fn verify_token_at(path: &str, expected: &str) -> Result<()> {
+    match read_token_at(path)? {
+        Some(SavedRefreshToken::Encrypted(value, TOKEN_STORE_VERSION)) if value == expected => Ok(()),
+        _ => bail!("vault readback verification failed"),
+    }
 }
 
 fn encrypt_refresh_token(refresh_token: &str) -> Result<TokenStoreData> {
@@ -658,12 +724,12 @@ fn encrypt_refresh_token(refresh_token: &str) -> Result<TokenStoreData> {
     SystemRandom::new()
         .fill(&mut nonce)
         .map_err(|_| anyhow::anyhow!("failed to generate xCloud token nonce"))?;
-    let cipher = token_cipher(&key)?;
+    let cipher = token_cipher(&key, TOKEN_STORE_VERSION)?;
     let mut ciphertext = refresh_token.as_bytes().to_vec();
     cipher
         .seal_in_place_append_tag(
             Nonce::assume_unique_for_key(nonce),
-            Aad::from(TOKEN_AAD),
+            Aad::from(TOKEN_AAD_V2),
             &mut ciphertext,
         )
         .map_err(|_| anyhow::anyhow!("failed to encrypt xCloud login token"))?;
@@ -675,7 +741,7 @@ fn encrypt_refresh_token(refresh_token: &str) -> Result<TokenStoreData> {
 }
 
 fn decrypt_refresh_token(data: &TokenStoreData) -> Result<String> {
-    if data.version != TOKEN_STORE_VERSION {
+    if !matches!(data.version, 1 | TOKEN_STORE_VERSION) {
         bail!("unsupported xCloud token store version {}", data.version);
     }
     let nonce = decode_hex(&data.nonce).context("invalid xCloud token nonce")?;
@@ -684,19 +750,26 @@ fn decrypt_refresh_token(data: &TokenStoreData) -> Result<String> {
         .map_err(|_| anyhow::anyhow!("invalid xCloud token nonce length"))?;
     let mut ciphertext = decode_hex(&data.ciphertext).context("invalid xCloud ciphertext")?;
     let key = load_token_key()?;
-    let cipher = token_cipher(&key)?;
+    let cipher = token_cipher(&key, data.version)?;
     let plaintext = cipher
         .open_in_place(
             Nonce::assume_unique_for_key(nonce),
-            Aad::from(TOKEN_AAD),
+            Aad::from(if data.version == 1 { TOKEN_AAD } else { TOKEN_AAD_V2 }),
             &mut ciphertext,
         )
         .map_err(|_| anyhow::anyhow!("xCloud token authentication failed"))?;
     String::from_utf8(plaintext.to_vec()).context("decrypted xCloud token is not UTF-8")
 }
 
-fn token_cipher(key: &[u8; TOKEN_KEY_SIZE]) -> Result<LessSafeKey> {
-    let key = UnboundKey::new(&aead::CHACHA20_POLY1305, key)
+fn token_cipher(key: &[u8; TOKEN_KEY_SIZE], version: u8) -> Result<LessSafeKey> {
+    // Derive an independent AES key; do not reuse the legacy ChaCha key across algorithms.
+    let derived = ring::hmac::sign(&ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key), TOKEN_AAD_V2);
+    let (algorithm, material): (&aead::Algorithm, &[u8]) = match version {
+        1 => (&aead::CHACHA20_POLY1305, key),
+        2 => (&aead::AES_256_GCM, derived.as_ref()),
+        _ => bail!("unsupported token cipher"),
+    };
+    let key = UnboundKey::new(algorithm, material)
         .map_err(|_| anyhow::anyhow!("failed to initialize xCloud token cipher"))?;
     Ok(LessSafeKey::new(key))
 }

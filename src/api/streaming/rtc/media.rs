@@ -320,6 +320,7 @@ impl VideoReceiver {
         }
         self.last_status_damage = (self.stats.dropped, self.stats.decode_errors);
 
+        crate::diagnostics::metrics((rx_mbps * 1000.0) as u64, self.jitter_us, self.stats.detected_sequence_gaps, self.stats.recovered_or_late_packets, self.stats.dropped, self.stats.decode_errors);
         let performance = crate::streaming::video::video_performance_summary();
         let source_fps = self
             .stats

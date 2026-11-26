@@ -234,9 +234,12 @@ async fn run_session<B: super::session::RtcSessionBackend>(
     let mut consecutive_pump_errors = 0u32;
     let mut active_gamepad_pulse: Option<(GamepadFrame, Instant)> = None;
     let mut last_gamepad_sent: Option<(GamepadFrame, Instant)> = None;
+    let mut last_input_sample = Instant::now();
+    let mut stale_released = false;
 
     loop {
         if !drain_commands(&mut session, &commands_rx) {
+            send_sampled_gamepad_frame(&mut session, SampledGamepadFrame { frame: GamepadFrame::default(), sampled_at: Instant::now() }, &mut last_gamepad_sent, true);
             let _ = session.close();
             return Ok(());
         }
@@ -253,6 +256,10 @@ async fn run_session<B: super::session::RtcSessionBackend>(
             .lock()
             .ok()
             .and_then(|mut latest| latest.take());
+        if let Some(sampled) = latest.as_ref() {
+            last_input_sample = sampled.sampled_at;
+            stale_released = false;
+        }
         if let Some((pulse, release_at)) = &active_gamepad_pulse {
             if Instant::now() >= *release_at {
                 active_gamepad_pulse = None;
@@ -279,7 +286,14 @@ async fn run_session<B: super::session::RtcSessionBackend>(
                 );
             }
         } else if let Some(sampled) = latest {
-            send_sampled_gamepad_frame(&mut session, sampled, &mut last_gamepad_sent, false);
+            if sampled.sampled_at.elapsed() < Duration::from_millis(100) {
+                send_sampled_gamepad_frame(&mut session, sampled, &mut last_gamepad_sent, false);
+            }
+        }
+        if !stale_released && active_gamepad_pulse.is_none() && last_input_sample.elapsed() >= Duration::from_millis(100) {
+            send_sampled_gamepad_frame(&mut session, SampledGamepadFrame { frame: GamepadFrame::default(), sampled_at: Instant::now() }, &mut last_gamepad_sent, true);
+            stale_released = true;
+            crate::diagnostics::step("controller", "STALE_NEUTRAL");
         }
 
         let local_candidates = match session.pump().await {

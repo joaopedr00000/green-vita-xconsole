@@ -14,7 +14,9 @@ const AUDIO_CHANNELS: usize = 2;
 const AUDIO_BYTES_PER_SECOND: u32 = AUDIO_SAMPLE_RATE as u32 * AUDIO_CHANNELS as u32 * 2;
 // Keep audio close to live video; the previous 240ms cap made audible events
 // noticeably late after jitter. Retain conservative startup headroom for 2.4GHz.
-const MAX_QUEUED_AUDIO_BYTES: u32 = AUDIO_BYTES_PER_SECOND * 160 / 1_000;
+fn pcm_queue_cap_bytes(target_ms: u32) -> u32 {
+    AUDIO_BYTES_PER_SECOND * (target_ms.clamp(50, 110) + 40) / 1_000
+}
 const AUDIO_START_BUFFER_BYTES: u32 = AUDIO_BYTES_PER_SECOND * 60 / 1_000;
 const MAX_OPUS_FRAME_SAMPLES_PER_CHANNEL: usize = 5_760;
 const MAX_PENDING_OPUS_PACKETS: usize = 32;
@@ -167,7 +169,11 @@ impl AudioRenderer {
 
         for packet in packets {
             match self.packets_tx.try_send(packet) {
-                Ok(()) | Err(TrySendError::Full(_)) => {}
+                Ok(()) => {},
+                Err(TrySendError::Full(_)) => {
+                    METRICS.audio_drops.fetch_add(1, Ordering::Relaxed);
+                    self.fade_next_packet = true;
+                }
                 Err(TrySendError::Disconnected(packet)) => {
                     eprintln!("Audio decode worker stopped; restarting");
                     self.restart_decode_worker();
@@ -180,7 +186,7 @@ impl AudioRenderer {
             match self.samples_rx.try_recv() {
                 Ok(mut samples) => {
                     let sample_bytes = (samples.len() * size_of::<i16>()) as u32;
-                    if self.queue.size().saturating_add(sample_bytes) > MAX_QUEUED_AUDIO_BYTES {
+                    if self.queue.size().saturating_add(sample_bytes) > pcm_queue_cap_bytes(self.prebuffer_ms) {
                         // Discard this *new* PCM packet, never abruptly clear already queued
                         // samples. The buffer drains naturally toward the live stream.
                         METRICS.audio_drops.fetch_add(1, Ordering::Relaxed);
