@@ -1,0 +1,58 @@
+name: Publish GreenVita v0.3.3 Final
+on:
+  push:
+    branches: [vita-v0.3.3-final]
+    paths: [.github/workflows/publish-green-vita-v0.3.3.yml]
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: green-vita-v033-final-publish
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify tested source and successful CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTED_SHA: 1ddab60822e8e6103a9421e8d5288ba8824007d2
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/$GITHUB_REPOSITORY/actions/runs/45777918383 --jq .head_sha)" = "$TESTED_SHA"
+          test "$(gh api repos/$GITHUB_REPOSITORY/actions/runs/45777918383 --jq .conclusion)" = success
+          test "$(gh api repos/$GITHUB_REPOSITORY/actions/artifacts/15096977742 --jq .name)" = GreenVita-0.3.3-candidate
+          test "$(gh api repos/$GITHUB_REPOSITORY/actions/artifacts/15096977742 --jq .expired)" = false
+          git diff --exit-code "$TESTED_SHA" "$GITHUB_SHA" -- . ':!README.md' ':!docs/releases/v0.3.3.md' ':!.github/workflows/publish-green-vita-v0.3.3.yml'
+          grep -q '^version = "0.3.3"$' Cargo.toml
+      - name: Download original tested VPK
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 45777918383
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          name: GreenVita-0.3.3-candidate
+          path: dist
+      - name: Verify package and create checksum
+        run: |
+          set -euo pipefail
+          test -s dist/green-vita.vpk
+          unzip -tq dist/green-vita.vpk
+          unzip -Z1 dist/green-vita.vpk | grep -Fx eboot.bin
+          cd dist
+          sha256sum green-vita.vpk > green-vita.vpk.sha256
+      - name: Publish stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view v0.3.3 >/dev/null 2>&1; then
+            echo 'Release already exists; refusing overwrite.'
+            exit 1
+          fi
+          gh release create v0.3.3 dist/green-vita.vpk dist/green-vita.vpk.sha256 --target "$GITHUB_SHA" --title "GreenVita v0.3.3 Final" --notes-file docs/releases/v0.3.3.md --draft
+          gh release edit v0.3.3 --draft=false --latest
+          gh release view v0.3.3 --json url,isDraft,isPrerelease,assets

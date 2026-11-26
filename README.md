@@ -27,7 +27,7 @@ You need a homebrew-enabled PS Vita with VitaShell and an Xbox account that has
 access to Xbox Cloud Gaming.
 
 1. Download `green-vita.vpk` from the
-   [GreenVita v0.3.2 Final](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.3.2). The previous [v0.3.1 release](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.3.1) remains available for rollback.
+   [GreenVita v0.3.3 Final](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.3.3). The previous [v0.3.2 Final](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.3.2) remains available for rollback.
    For the earlier stable experiment, use the [v0.2.0 beta](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.2.0-beta.1).
 2. Transfer the VPK to the Vita.
 3. Install it with VitaShell.
@@ -42,6 +42,12 @@ access to Xbox Cloud Gaming.
 This fork keeps the original GreenVita interface, settings, controller support, xCloud and xHome features. When connecting to Xbox Cloud Gaming, it automatically tries the `xgpuconsole` offering with Xbox One client metadata and silently falls back to the original `xgpuweb`/`xgpuwebf2p` connection when the console attempt fails. The console attempt is **experimental** and does not provide genuine Xbox hardware authentication, guarantee game compatibility or bypass Microsoft's server-side access controls.
 
 The original source project is [Day-OS/green-vita](https://github.com/Day-OS/green-vita). This fork includes the extra console-offering experiment and optional adaptive streaming profiles (6/10/15 Mbps requested RTCP REMB), video jitter diagnostics, adaptive audio buffering and manual session restart. Console-only games are not confirmed playable.
+
+## 0.3.3 Final — Extreme latency update
+
+Universal Extreme synchronization, direct frame-ready presentation, automatic Gamepad RAW, adaptive audio refill and a six-page diagnostic HUD with a 60-second benchmark. Physical Vita final benchmark: 3,066 samples, 4.99 ms mean, 2.59 ms minimum, 7.65 ms P95 and 9.19 ms P99. These measure client pipeline time, not total button-to-screen latency. The tester reports excellent video quality, improved perceived responsiveness and uninterrupted audio in the final Flight Simulator session.
+
+Read the complete [release notes in English, Portuguese and Spanish](docs/releases/v0.3.3.md) for the full changelog, benchmark methodology and limitations.
 
 ## Build
 
