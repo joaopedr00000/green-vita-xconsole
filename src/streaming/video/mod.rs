@@ -85,12 +85,12 @@ impl DirectVideoOutput {
         self.frame_displayed.notify_one();true
     }
 
-    pub(super) fn lock_decode_target(&self) -> Option<DirectVideoTargetGuard<'_>> {
+    pub(super) fn lock_decode_target(&self,wait_ms:u64) -> Option<DirectVideoTargetGuard<'_>> {
         let mut state = self.state.lock().ok()?;
         if state.pending.is_some() {
             let (waited_state, _) = self
                 .frame_displayed
-                .wait_timeout_while(state, MAX_PENDING_TEXTURE_WAIT, |state| {
+                .wait_timeout_while(state, Duration::from_millis(wait_ms).min(MAX_PENDING_TEXTURE_WAIT), |state| {
                     state.targets.is_some() && state.pending.is_some()
                 })
                 .ok()?;
@@ -101,6 +101,9 @@ impl DirectVideoOutput {
             .pending
             .map(|(index, _)| index)
             .unwrap_or_else(|| state.displayed.map_or(0, |displayed| 1 - displayed));
+        // Reuse only the unpublished-to-screen target. Invalidate the older
+        // generation before writing so a no-output/error cannot expose stale pixels.
+        if wait_ms<67 && state.pending.take().is_some(){metrics::CATCH_UP_REPLACEMENTS.fetch_add(1,std::sync::atomic::Ordering::Relaxed);}
         Some(DirectVideoTargetGuard {
             state,
             target: targets[index],

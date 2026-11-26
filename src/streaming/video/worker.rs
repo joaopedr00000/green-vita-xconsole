@@ -173,6 +173,7 @@ fn run_decode_loop(
                     &result_ready,
                     access_unit,
                     &direct_output,
+                    access_units.len(),
                 );
             }
         }
@@ -187,6 +188,7 @@ fn decode_queued_access_unit(
     result_ready: &tokio::sync::Notify,
     access_unit: QueuedAccessUnit,
     direct_output: &DirectVideoOutput,
+    remaining:usize,
 ) {
     if access_unit.generation != generation.load(Ordering::Acquire) {
         return;
@@ -208,7 +210,8 @@ fn decode_queued_access_unit(
     }
 
     let texture_started_at=Instant::now();
-    let Some(direct_target) = direct_output.lock_decode_target() else {
+    let wait_ms=crate::streaming::policy::catch_up_wait_ms(crate::settings::video_catch_up(),dequeued_at.saturating_duration_since(access_unit.queued_at).as_micros() as u64,remaining);
+    let Some(direct_target) = direct_output.lock_decode_target(wait_ms) else {
         // Do not decode until the renderer has registered its two GXM textures. There is no
         // legacy output buffer to copy from anymore.
         metrics::METRICS.skipped.fetch_add(1, Ordering::Relaxed);
