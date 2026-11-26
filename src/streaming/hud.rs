@@ -6,7 +6,7 @@ pub(crate) struct PlaybackMetrics {
     pub decode_us:u64,pub queue_age_us:u64,pub input_us:u64,pub display_us:u64,pub pipeline_us:u64,
     pub audio_ms:u64,pub underruns:u64,pub audio_drops:u64,pub skipped:u64,pub replaced:u64,
     pub queue_full:u64,pub resyncs:u64,pub resets:u64,
-    pub stages:Option<PresentedStages>,pub pipeline_avg_us:u64,pub pipeline_max_us:u64,pub stage_samples:u64,pub queue_depth:u64,pub stale_handoffs:u64,pub output_replacements:u64,pub catch_up_replacements:u64,
+    pub stages:Option<PresentedStages>,pub pipeline_avg_us:u64,pub pipeline_max_us:u64,pub stage_samples:u64,pub queue_depth:u64,pub stale_handoffs:u64,pub output_replacements:u64,pub catch_up_replacements:u64,pub frame_wakes:u64,pub idle_swaps_saved:u64,pub pipeline_p95_us:u64,pub gap_p95_us:u64,
 }
 #[derive(Clone,Debug)]
 pub(crate) struct StreamHud {
@@ -31,7 +31,7 @@ mod tests{
 #[derive(Clone,Copy,Debug,Default)]
 pub(crate) struct DecodeStages {pub queue_us:u64,pub texture_us:u64,pub decode_us:u64}
 #[derive(Clone,Copy,Debug,Default)]
-pub(crate) struct PresentedStages {pub decode:DecodeStages,pub display_us:u64,pub pre_present_us:u64,pub claim_us:u64,pub draw_us:u64,pub present_call_us:u64,pub total_us:u64}
+pub(crate) struct PresentedStages {pub decode:DecodeStages,pub present_gap_us:u64,pub display_us:u64,pub pre_present_us:u64,pub claim_us:u64,pub draw_us:u64,pub present_call_us:u64,pub total_us:u64}
 #[derive(Clone,Copy,Debug)]
 pub(crate) struct RttReading {pub current_us:u64,pub average_us:u64,pub responses:u64,pub observed_at:Instant}
 impl RttReading {
@@ -60,4 +60,14 @@ mod new_tests {
     use super::*;
     #[test]fn rtt_requires_real_response(){assert_eq!(rtt_values(0.025,0.060,2),Some((25000,30000)));assert_eq!(rtt_values(0.025,0.060,0),None);assert_eq!(rtt_values(f64::NAN,1.0,1),None);}
     #[test]fn cadence_rejects_single_short_or_long_interval(){let mut c=SourceCadence::default();for d in [16667,16667,14900,33334,16667]{c.observe(d);}assert!((c.estimate().unwrap()-60.0).abs()<0.01);}
+}
+
+pub(crate) fn percentile95(values:&mut [u64])->u64{
+    if values.is_empty(){return 0;}
+    values.sort_unstable();values[((values.len()*95).div_ceil(100))-1]
+}
+#[cfg(test)]
+mod percentile_tests{
+    use super::*;
+    #[test]fn nearest_rank(){assert_eq!(percentile95(&mut []),0);assert_eq!(percentile95(&mut [8]),8);let mut x:Vec<u64>=(1..=100).rev().collect();assert_eq!(percentile95(&mut x),95);}
 }

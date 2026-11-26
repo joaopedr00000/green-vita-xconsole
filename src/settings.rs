@@ -32,6 +32,10 @@ impl StreamProfile {
     }
 }
 static ACTIVE_STREAM_PROFILE: AtomicU8 = AtomicU8::new(2);
+// 0 = exact 0.3.2 pacing, 1 = adaptive, 2 = extreme.
+static LATENCY_MODE:AtomicU8=AtomicU8::new(1);
+pub(crate) fn set_latency_mode(mode:u8){LATENCY_MODE.store(mode.min(2),Ordering::Relaxed);}
+pub(crate) fn latency_mode()->u8{LATENCY_MODE.load(Ordering::Relaxed)}
 pub(crate) fn set_active_stream_profile(profile: StreamProfile) {
     ACTIVE_STREAM_PROFILE.store(match profile {
         StreamProfile::LowLatency => 0,
@@ -148,6 +152,7 @@ pub struct Settings {
     /// 0 summary, 1 network, 2 video/audio, 3 controls, 4 overview.
     pub hud_page:u8,
     pub hud_opacity:u8,
+    pub latency_mode:u8,
     pub stream_profile: StreamProfile,
     /// Only a host returned in the signed-in account's regional allowlist is accepted.
     pub preferred_cloud_region: Option<String>,
@@ -182,7 +187,7 @@ impl Default for Settings {
         Self {
             locale: Locale::default(),
             show_stream_debug_info: false,
-            hud_page:0,hud_opacity:85,
+            hud_page:0,hud_opacity:85,latency_mode:1,
             stream_profile: StreamProfile::Quality,
             preferred_cloud_region: None,
             game_profiles: HashMap::new(),

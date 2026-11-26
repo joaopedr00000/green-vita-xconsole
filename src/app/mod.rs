@@ -49,6 +49,7 @@ impl App {
     pub fn new() -> Result<Self> {
         let settings = Settings::load();
         crate::settings::set_active_stream_profile(settings.stream_profile);
+        crate::settings::set_latency_mode(settings.latency_mode);
         let service = Service::new(settings.locale.as_str());
         let release_update = Arc::new(Mutex::new(None));
         let update_slot = Arc::clone(&release_update);

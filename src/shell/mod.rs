@@ -63,6 +63,7 @@ pub async fn run(mut app: App) -> Result<()> {
     // A stable, noninteractive playback overlay needs only four UI updates/s.
     // All video, input, audio and backend work still runs on every loop.
     let mut overlay_cache:Option<(Instant,(bool,u8,u8,crate::settings::Locale))>=None;
+    let mut last_present=Instant::now();
 
     loop {
         let loop_started_at = Instant::now();
@@ -248,7 +249,7 @@ pub async fn run(mut app: App) -> Result<()> {
             (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a,b),
             (None,None) => true, _ => false,
         };
-        if !same { audio_renderer.clear_session(); overlay_cache=None; }
+        if !same { audio_renderer.clear_session(); overlay_cache=None; last_present=Instant::now(); }
         audio_session_output = output;
         let native_config = match &app.state {
             AppState::Streaming(s) if !s.paused => s.native_config(&app.settings),
@@ -309,10 +310,33 @@ pub async fn run(mut app: App) -> Result<()> {
         }else{None};
         full_output.textures_delta
         };
-        // Claim the newest decoded texture at the last safe moment.
-        surface.sync_video_frame(app.state.streaming())?;
-        surface.draw_scene(matches!(&app.state, AppState::Streaming(_)))?;
-        surface.paint_egui(&textures_delta)?;
+        let mode=crate::settings::latency_mode();
+        let source_fps=app.state.streaming().and_then(|s|s.hud.as_ref()).filter(|h|h.at.elapsed()<Duration::from_secs(3)).and_then(|h|h.source_fps);
+        let live_pacing=mode!=0 && cacheable && matches!(&app.state,AppState::Streaming(s) if !s.paused);
+        let gap=crate::streaming::policy::early_wake_gap_us(mode,source_fps).map(Duration::from_micros);
+        // Near a presentation opportunity, give an in-flight decode a bounded
+        // chance to finish. Only for cached noninteractive playback, never menus.
+        if live_pacing && reuse && gap.is_some_and(|g|last_present.elapsed()>=g){
+            if let Some(output)=audio_session_output.as_ref(){
+                let wait=crate::streaming::policy::late_wait_us(mode,source_fps.is_some_and(|f|(50.0..=125.0).contains(&f)));
+                if wait>0 && !output.has_pending() {
+                    if output.wait_ready(Duration::from_micros(wait)).await{
+                        crate::streaming::video::metrics::FRAME_WAKES.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+        // Claim only at the final draw, never while the old texture is being used.
+        let claimed=surface.sync_video_frame(app.state.streaming())?;
+        if !live_pacing || !reuse || claimed{
+            surface.draw_scene(matches!(&app.state, AppState::Streaming(_)))?;
+            surface.paint_egui(&textures_delta)?;
+            last_present=Instant::now();
+        }else{
+            // Cached overlay + no new picture: no redundant swap. Backend,
+            // audio, events and input servicing are still on their usual loop.
+            crate::streaming::video::metrics::IDLE_SWAPS_SAVED.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+        }
         // Refresh controls after potentially expensive video/UI presentation,
         // rather than making an input change wait for the next render iteration.
         // pump_events updates SDL state; events are consumed by the regular loop.
@@ -336,7 +360,22 @@ pub async fn run(mut app: App) -> Result<()> {
                 let remaining = frame_deadline.saturating_duration_since(Instant::now());
                 // Menus do not need four-millisecond input refreshes.
                 let live = matches!(&app.state, AppState::Streaming(s) if !s.paused);
-                sleep(if live { remaining.min(STREAM_INPUT_POLL_INTERVAL) } else { remaining }).await;
+                let slice=if live { remaining.min(STREAM_INPUT_POLL_INTERVAL) } else { remaining };
+                let mut early=false;
+                if live && live_pacing {
+                    if let (Some(gap),Some(output))=(gap,audio_session_output.as_ref()){
+                        let until_gap=gap.saturating_sub(last_present.elapsed());
+                        if until_gap.is_zero(){
+                            early=output.wait_ready(slice).await;
+                        }else{
+                            sleep(slice.min(until_gap)).await;
+                        }
+                    }else{sleep(slice).await;}
+                }else{sleep(slice).await;}
+                if early{
+                    crate::streaming::video::metrics::FRAME_WAKES.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+                    break;
+                }
                 if Instant::now() >= frame_deadline {
                     break;
                 }

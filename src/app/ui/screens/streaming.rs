@@ -164,11 +164,15 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                     row(ui,tr("Gaps / atrasados","Gaps / late"),format!("{} / {}",h.gaps,h.late),white);
                     row(ui,tr("Descartes / erros","Drops / errors"),format!("{} / {}",h.dropped,h.errors),white);
                     row(ui,tr("Fila cheia / trocas","Queue full / replaced"),format!("{} / {}",m.queue_full,m.replaced),white);
+                    row(ui,tr("Pipeline / intervalo p95","Pipeline / interval p95"),if m.stage_samples>0{format!("{:.1} / {:.1} ms",m.pipeline_p95_us as f64/1000.0,m.gap_p95_us as f64/1000.0)}else{"—".to_owned()},white);
+                    row(ui,tr("Despertares / swaps evit.","Wakes / swaps saved"),format!("{} / {}",m.frame_wakes,m.idle_swaps_saved),white);
                     row(ui,tr("Montagem / decode","Assembly / decode"),format!("{:.1} / {:.1} ms",m.rtp_avg_us as f64/1000.0,m.decode_us as f64/1000.0),white);
                     row(ui,tr("Antes / chamada present","Before / present call"),m.stages.map(|s|format!("{:.1} / {:.1} ms",s.pre_present_us as f64/1000.0,s.present_call_us as f64/1000.0)).unwrap_or_else(||"—".to_owned()),white);
                     row(ui,tr("Espera quadro / desenho","Frame wait / draw"),m.stages.map(|s|format!("{:.1} / {:.1} ms",s.claim_us as f64/1000.0,s.draw_us as f64/1000.0)).unwrap_or_else(||"—".to_owned()),white);
                     row(ui,tr("Buffer de áudio","Audio target"),format!("{} ms",m.audio_ms),white);
                     row(ui,tr("Recuperação IDR","IDR recovery"),if h.waiting{tr("Aguardando","Waiting")}else{tr("Normal","Normal")},white);
+                    let modes=if pt{["Clássico","Adaptativo","Extremo"]}else{["Classic","Adaptive","Extreme"]};
+                    row(ui,tr("Sincronização","Pacing"),modes[app.settings.latency_mode.min(2) as usize],white);
                     row(ui,tr("Controle","Input"),if input.native_active{"Gamepad RAW"}else{"SDL2"},white);
                 },
                 _=>{}

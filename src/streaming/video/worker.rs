@@ -141,6 +141,13 @@ fn pin_decoder_thread() {
     if result < 0 {
         eprintln!("Failed to pin video decoder thread to user CPU 2: {result:#x}");
     }
+    // RTC is already time-critical on USER_1. Do not raise it further.
+    // Extreme optionally elevates the decoder on its existing USER_2 core,
+    // not the renderer or audio workers; failure leaves OS defaults intact.
+    if crate::settings::latency_mode()==2 {
+        let priority=unsafe{sdl2::sys::SDL_SetThreadPriority(sdl2::sys::SDL_ThreadPriority::SDL_THREAD_PRIORITY_HIGH)};
+        crate::diagnostics::step("decoder_priority",if priority==0{"HIGH_OK"}else{"HIGH_UNAVAILABLE"});
+    }
 }
 
 fn run_decode_loop(
@@ -212,7 +219,7 @@ fn decode_queued_access_unit(
     }
 
     let texture_started_at=Instant::now();
-    let wait_ms=crate::streaming::policy::catch_up_wait_ms(dequeued_at.saturating_duration_since(access_unit.queued_at).as_micros() as u64,remaining,access_unit.source_duration_us);
+    let wait_ms=crate::streaming::policy::experimental_texture_wait_ms(crate::settings::latency_mode(),dequeued_at.saturating_duration_since(access_unit.queued_at).as_micros() as u64,remaining,access_unit.source_duration_us);
     let Some(direct_target) = direct_output.lock_decode_target(wait_ms) else {
         // Do not decode until the renderer has registered its two GXM textures. There is no
         // legacy output buffer to copy from anymore.

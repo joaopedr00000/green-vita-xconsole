@@ -40,6 +40,7 @@ struct DirectVideoOutputState {
 pub(crate) struct DirectVideoOutput {
     state: Mutex<DirectVideoOutputState>,
     frame_displayed: Condvar,
+    frame_ready:tokio::sync::Notify,
     pub(crate) decoder_ready: AtomicBool,
     pub(crate) width: u32,
     pub(crate) height: u32,
@@ -55,6 +56,7 @@ impl DirectVideoOutput {
                 next_generation: 0,
             }),
             frame_displayed: Condvar::new(),
+            frame_ready:tokio::sync::Notify::new(),
             decoder_ready: AtomicBool::new(false),
             width,
             height,
@@ -76,6 +78,23 @@ impl DirectVideoOutput {
             state.pending = None;
         }
         self.frame_displayed.notify_all();
+        self.frame_ready.notify_one();
+    }
+
+    pub(crate) fn has_pending(&self)->bool{
+        self.state.try_lock().ok().is_some_and(|s|s.targets.is_some() && s.pending.is_some())
+    }
+    /// Single render consumer. Stored Notify permit prevents a missed publish
+    /// between checking the state and awaiting the signal. A stale permit is
+    /// rechecked against pending state; never treat a notification as a frame.
+    pub(crate) async fn wait_ready(&self,timeout:Duration)->bool{
+        let end=Instant::now()+timeout;
+        loop {
+            if self.has_pending(){return true;}
+            let left=end.saturating_duration_since(Instant::now());
+            if left.is_zero(){return false;}
+            if tokio::time::timeout(left,self.frame_ready.notified()).await.is_err(){return self.has_pending();}
+        }
     }
 
     /// Renderer claims the newest complete picture and reserves that texture
@@ -117,6 +136,7 @@ impl DirectVideoOutput {
         }
         Some(DirectVideoTargetGuard {
             state,
+            ready:&self.frame_ready,
             target: targets[index],
             index,
         })
@@ -125,6 +145,7 @@ impl DirectVideoOutput {
 
 pub(super) struct DirectVideoTargetGuard<'a> {
     state: MutexGuard<'a, DirectVideoOutputState>,
+    ready:&'a tokio::sync::Notify,
     target: VideoTextureTarget,
     index: usize,
 }
@@ -134,6 +155,8 @@ impl DirectVideoTargetGuard<'_> {
         self.state.next_generation = self.state.next_generation.wrapping_add(1);
         let frame=DecodedFrame{texture_index:self.index,generation:self.state.next_generation,decoded_at,enqueued_at,stages};
         self.state.pending=Some(frame);
+        drop(self.state);
+        self.ready.notify_one();
         frame
     }
 }
