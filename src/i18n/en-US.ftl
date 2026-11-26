@@ -90,3 +90,6 @@ update-available = New version available: { $version }
 settings-cloud-region = Xbox cloud region
 settings-cloud-region-hint = HTTPS timing is only a connectivity hint; it is not gameplay ping. Changes apply to new sessions.
 settings-wifi-turbo-hint = Wi-Fi Turbo: for smoother 720p use clean 2.4 GHz Wi-Fi; compare jitter, gaps, drops and rx in debug view. The Turbo TCP control port is not used.
+
+settings-front-touch-stick-clicks = L3/R3 on front touch (lower half)
+settings-front-touch-stick-clicks-hint = Overrides front mirroring. Rear upper zones retain their mapping; rear lower zones are free.

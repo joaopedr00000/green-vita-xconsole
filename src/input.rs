@@ -122,6 +122,7 @@ pub fn read_gamepad_frame(
     touch_buttons: &RearTouchButtons,
     rear_touch_enabled: bool,
     front_touch_auxiliary_buttons: bool,
+    front_touch_stick_clicks:bool,
 ) -> Option<GamepadFrame> {
     let controller = controller?;
     let button = |b: Button| f32::from(controller.button(b));
@@ -146,6 +147,7 @@ pub fn read_gamepad_frame(
                     RearTouchButton::L3,
                     rear_touch_enabled,
                     front_touch_auxiliary_buttons,
+                    front_touch_stick_clicks,
                 ),
         ),
         right_thumb: f32::from(
@@ -154,6 +156,7 @@ pub fn read_gamepad_frame(
                     RearTouchButton::R3,
                     rear_touch_enabled,
                     front_touch_auxiliary_buttons,
+                    front_touch_stick_clicks,
                 ),
         ),
         left_thumb_x_axis: axis_to_f32(controller.axis(Axis::LeftX)),
@@ -170,6 +173,7 @@ pub fn read_gamepad_frame(
                 RearTouchButton::L2,
                 rear_touch_enabled,
                 front_touch_auxiliary_buttons,
+                front_touch_stick_clicks,
             ),
         ),
         right_trigger: trigger_value(
@@ -182,6 +186,7 @@ pub fn read_gamepad_frame(
                 RearTouchButton::R2,
                 rear_touch_enabled,
                 front_touch_auxiliary_buttons,
+                front_touch_stick_clicks,
             ),
         ),
     })
@@ -284,9 +289,11 @@ impl RearTouchButtons {
         }
     }
 
-    fn pressed(&self, button: RearTouchButton, include_rear: bool, include_front: bool) -> bool {
-        (include_rear && self.rear_fingers.values().any(|pressed| *pressed == button))
-            || (include_front
+    fn pressed(&self, button: RearTouchButton, include_rear: bool, include_front: bool, front_sticks:bool) -> bool {
+        let lower=matches!(button,RearTouchButton::L3|RearTouchButton::R3);
+        let enabled=|front|crate::streaming::input::touch_zone_enabled(front,lower,include_rear,include_front,front_sticks);
+        (enabled(false) && self.rear_fingers.values().any(|pressed| *pressed == button))
+            || (enabled(true)
                 && self
                     .front_fingers
                     .values()

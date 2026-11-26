@@ -114,7 +114,9 @@ pub async fn run(mut app: App) -> Result<()> {
             {
                 direct_commands.push(command);
             }
-            if let Some(egui_event) = map_pointer_event(
+            let split_gameplay=matches!(&app.state,AppState::Streaming(s) if !s.paused && s.front_touch_stick_clicks(&app.settings));
+            let split_touch_event=split_gameplay && matches!(&event,Event::FingerDown{touch_id:1,..}|Event::FingerMotion{touch_id:1,..}|Event::FingerUp{touch_id:1,..});
+            if !split_touch_event && let Some(egui_event) = map_pointer_event(
                 &event,
                 (WIDTH as f32 / UI_SCALE, HEIGHT as f32 / UI_SCALE),
                 UI_SCALE,
@@ -125,6 +127,7 @@ pub async fn run(mut app: App) -> Result<()> {
             if let AppState::Streaming(streaming) = &app.state
                 && !streaming.paused
                 && !streaming.front_touch_auxiliary_buttons(&app.settings)
+                && !streaming.front_touch_stick_clicks(&app.settings)
                 && let Some(pointer_event) = map_stream_pointer_event(
                     &event,
                     (WIDTH as f32, HEIGHT as f32),
@@ -421,10 +424,11 @@ fn send_stream_gamepad_state(
     relay_back_as_view: bool,
 ) {
     let settings = &app.settings;
-    let (rear_touch_enabled, front_touch_auxiliary_buttons) = match &app.state {
+    let (rear_touch_enabled, front_touch_auxiliary_buttons, front_touch_stick_clicks) = match &app.state {
         AppState::Streaming(streaming) if !streaming.paused => (
             streaming.rear_touch_enabled(settings),
             streaming.front_touch_auxiliary_buttons(settings),
+            streaming.front_touch_stick_clicks(settings),
         ),
         _ => return,
     };
@@ -437,6 +441,7 @@ fn send_stream_gamepad_state(
         rear_touch_buttons,
         rear_touch_enabled,
         front_touch_auxiliary_buttons,
+        front_touch_stick_clicks,
     ) else {
         return;
     };

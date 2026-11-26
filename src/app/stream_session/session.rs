@@ -157,7 +157,7 @@ impl StreamingSession {
     pub(crate) fn native_config(&self, settings: &Settings) -> Option<crate::native_input::Config> {
         if self.ignore_confirm_until_release { return None; }
         let swap = self.title_id.as_deref().and_then(|id| settings.game_profile(id)).is_some_and(|p| p.swap_shoulders_and_triggers);
-        Some(crate::native_input::Config { rear: self.rear_touch_enabled(settings), front: self.front_touch_auxiliary_buttons(settings), swap, map: settings.control_map, deadzone_percent: settings.native_deadzone_percent })
+        Some(crate::native_input::Config { rear: self.rear_touch_enabled(settings), front: self.front_touch_auxiliary_buttons(settings), front_sticks: self.front_touch_stick_clicks(settings), swap, map: settings.control_map, deadzone_percent: settings.native_deadzone_percent })
     }
 
     pub(crate) fn front_touch_auxiliary_buttons(&self, settings: &Settings) -> bool {
@@ -165,6 +165,10 @@ impl StreamingSession {
             .as_deref()
             .and_then(|title_id| settings.game_profile(title_id))
             .is_some_and(|profile| profile.front_touch_auxiliary_buttons)
+    }
+
+    pub(crate) fn front_touch_stick_clicks(&self,settings:&Settings)->bool{
+        self.title_id.as_deref().and_then(|id|settings.game_profile(id)).is_some_and(|p|p.front_touch_stick_clicks)
     }
 
     pub(crate) fn rear_touch_enabled(&self, settings: &Settings) -> bool {

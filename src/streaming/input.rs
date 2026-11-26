@@ -109,3 +109,34 @@ mod native_tests {
     }
     #[test] fn poll_bounds() { assert_eq!(native_poll_ms(true),2); assert_eq!(native_poll_ms(false),4); }
 }
+
+pub(crate) fn touch_zone_enabled(front_panel:bool,lower_half:bool,rear_enabled:bool,front_mirror:bool,front_sticks:bool)->bool{
+    if front_sticks{
+        if front_panel{lower_half}else{rear_enabled && !lower_half}
+    }else if front_panel{front_mirror}else{rear_enabled}
+}
+#[cfg(test)]
+mod split_touch_tests{
+    use super::*;
+    #[test]fn legacy_layouts_are_unchanged(){
+        for rear in [false,true]{for mirror in [false,true]{for lower in [false,true]{
+            assert_eq!(touch_zone_enabled(false,lower,rear,mirror,false),rear);
+            assert_eq!(touch_zone_enabled(true,lower,rear,mirror,false),mirror);
+        }}}
+    }
+    #[test]fn split_only_sticks_front_and_triggers_rear(){
+        for rear in [false,true]{for mirror in [false,true]{
+            assert!(!touch_zone_enabled(true,false,rear,mirror,true));
+            assert!(touch_zone_enabled(true,true,rear,mirror,true));
+            assert_eq!(touch_zone_enabled(false,false,rear,mirror,true),rear);
+            assert!(!touch_zone_enabled(false,true,rear,mirror,true));
+        }}
+    }
+    #[test]fn both_stick_clicks_survive_shoulder_swap_and_remap(){
+        let mut frame=GamepadFrame{left_thumb:1.0,right_thumb:1.0,left_trigger:1.0,..Default::default()};
+        std::mem::swap(&mut frame.left_shoulder,&mut frame.left_trigger);
+        std::mem::swap(&mut frame.right_shoulder,&mut frame.right_trigger);
+        frame.remap(&default_control_map());
+        assert_eq!((frame.left_thumb,frame.right_thumb,frame.left_shoulder,frame.left_trigger),(1.0,1.0,1.0,0.0));
+    }
+}

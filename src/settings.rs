@@ -167,6 +167,7 @@ pub struct GameProfile {
     pub front_touch_auxiliary_buttons: bool,
     /// Controls only input from the physical rear touch panel. Front touch remains independent.
     pub rear_touch_enabled: bool,
+    pub front_touch_stick_clicks: bool,
 }
 
 impl Default for GameProfile {
@@ -175,6 +176,7 @@ impl Default for GameProfile {
             swap_shoulders_and_triggers: false,
             front_touch_auxiliary_buttons: false,
             rear_touch_enabled: true,
+            front_touch_stick_clicks: false,
         }
     }
 }
@@ -218,6 +220,10 @@ impl Settings {
             .entry(title_id)
             .or_default()
             .rear_touch_enabled = enabled;
+    }
+
+    pub fn set_front_touch_stick_clicks(&mut self,title_id:String,enabled:bool){
+        self.game_profiles.entry(title_id).or_default().front_touch_stick_clicks=enabled;
     }
 
     /// Loads from disk, falling back to defaults on any error.

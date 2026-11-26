@@ -86,3 +86,6 @@ settings-profile-balanced = Equilibrado (máx. 10 Mbps)
 settings-profile-quality = Calidad (máx. 15 Mbps)
 paused-restart-stream = Reiniciar transmisión
 update-available = Nueva versión disponible: { $version }
+
+settings-front-touch-stick-clicks = L3/R3 en la pantalla frontal (mitad inferior)
+settings-front-touch-stick-clicks-hint = Sustituye la duplicación frontal. Las zonas traseras superiores conservan su función; las inferiores quedan libres.

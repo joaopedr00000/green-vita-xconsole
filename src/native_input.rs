@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64,Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct Config { pub rear: bool, pub front: bool, pub swap: bool, pub map: [u8;16], pub deadzone_percent:u8 }
+pub struct Config { pub rear: bool, pub front: bool, pub front_sticks:bool, pub swap: bool, pub map: [u8;16], pub deadzone_percent:u8 }
 #[derive(Clone)]
 pub struct NativeSample { pub frame:GamepadFrame, pub sampled_at:Instant, pub changed_at:Instant, pub edge:Option<u64> }
 struct State { config:Option<Config>, sample:Option<NativeSample>, edges:VecDeque<NativeSample>, generation:u64, next_id:u64 }
@@ -184,7 +184,7 @@ fn sample_hardware(config: Config, cache: &mut HardwareCache) -> Option<(Gamepad
         right_thumb_x_axis:axis(pad.rx), right_thumb_y_axis:axis(pad.ry), ..Default::default()
     };
     // View/Back hold and pointer gestures remain owned by the UI.
-    for (port, enabled) in [(0,config.front),(1,config.rear)] {
+    for (port, enabled) in [(0,config.front || config.front_sticks),(1,config.rear)] {
         if !enabled { continue; }
         if cache.panel[port as usize].is_none() {
             let mut panel = Panel::default();
@@ -195,7 +195,9 @@ fn sample_hardware(config: Config, cache: &mut HardwareCache) -> Option<(Gamepad
         let mut touch = TouchData::default();
         if unsafe { sceTouchPeek(port,&mut touch,1) } <= 0 { return None; }
         for t in touch.reports.iter().take((touch.count as usize).min(8)) {
-            match (i32::from(t.x)<mid_x,i32::from(t.y)<mid_y) {
+            let lower=i32::from(t.y)>=mid_y;
+            if !crate::streaming::input::touch_zone_enabled(port==0,lower,config.rear,config.front,config.front_sticks){continue;}
+            match (i32::from(t.x)<mid_x,!lower) {
                 (true,true)=>f.left_trigger=1.0, (false,true)=>f.right_trigger=1.0,
                 (true,false)=>f.left_thumb=1.0, (false,false)=>f.right_thumb=1.0
             }

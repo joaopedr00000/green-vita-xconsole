@@ -16,6 +16,7 @@ pub enum Command {
     SetSwapShouldersAndTriggers { title_id: String, enabled: bool },
     SetRearTouchEnabled { title_id: String, enabled: bool },
     SetFrontTouchAuxiliaryButtons { title_id: String, enabled: bool },
+    SetFrontTouchStickClicks { title_id:String, enabled:bool },
     SetShowStreamDebugInfo(bool),
     CycleHudPage,
     CycleHudOpacity,
@@ -33,6 +34,7 @@ enum SettingsRow {
     GameSwap { title_id: String, enabled: bool },
     GameRearTouch { title_id: String, enabled: bool },
     GameFrontTouchAuxiliary { title_id: String, enabled: bool },
+    GameFrontTouchStickClicks { title_id:String, enabled:bool },
     StreamDebug(bool),
     HudPage,
     HudOpacity,
@@ -79,7 +81,9 @@ fn settings_rows(app: &App) -> Vec<SettingsRow> {
             .settings
             .game_profile(&title_id)
             .is_some_and(|profile| profile.front_touch_auxiliary_buttons);
-        rows.push(SettingsRow::GameFrontTouchAuxiliary { title_id, enabled });
+        rows.push(SettingsRow::GameFrontTouchAuxiliary { title_id:title_id.clone(), enabled });
+        let enabled=app.settings.game_profile(&title_id).is_some_and(|p|p.front_touch_stick_clicks);
+        rows.push(SettingsRow::GameFrontTouchStickClicks{title_id,enabled});
     }
     if app.service.api.config.cloud.regions.len() > 1 {
         rows.push(SettingsRow::CloudRegion);
@@ -213,13 +217,19 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
                     ) {
                         commands.push(
                             Command::SetFrontTouchAuxiliaryButtons {
-                                title_id,
+                                title_id:title_id.clone(),
                                 enabled: !front_touch_auxiliary_buttons,
                             }
                             .into(),
                         );
                     }
                     row_index += 1;
+                    let front_sticks=app.settings.game_profile(&title_id).is_some_and(|p|p.front_touch_stick_clicks);
+                    if checkbox_row(ui,selected_index==row_index,front_sticks,i18n.text("settings-front-touch-stick-clicks")){
+                        commands.push(Command::SetFrontTouchStickClicks{title_id,enabled:!front_sticks}.into());
+                    }
+                    row_index+=1;
+                    if front_sticks{ui.small(i18n.text("settings-front-touch-stick-clicks-hint"));}
                 }
 
                 ui.add_space(14.0);
@@ -491,6 +501,9 @@ impl App {
                     enabled: !enabled,
                 });
             }
+            SettingsRow::GameFrontTouchStickClicks{title_id,enabled}=>{
+                return self.handle_settings_command(Command::SetFrontTouchStickClicks{title_id:title_id.clone(),enabled:!enabled});
+            }
             SettingsRow::CloudRegion => {
                 let regions = &self.service.api.config.cloud.regions;
                 let next = match self.settings.preferred_cloud_region.as_deref() {
@@ -586,6 +599,10 @@ impl App {
             Command::SetFrontTouchAuxiliaryButtons { title_id, enabled } => {
                 self.settings
                     .set_front_touch_auxiliary_buttons(title_id, enabled);
+                self.settings.save();
+            }
+            Command::SetFrontTouchStickClicks{title_id,enabled}=>{
+                self.settings.set_front_touch_stick_clicks(title_id,enabled);
                 self.settings.save();
             }
             Command::SetCloudRegion(region) => {
