@@ -152,9 +152,10 @@ impl StreamingSession {
         self.backend.send_gamepad_frame(frame);
     }
 
-    pub(crate) fn native_config(&self, settings: &Settings) -> crate::native_input::Config {
+    pub(crate) fn native_config(&self, settings: &Settings) -> Option<crate::native_input::Config> {
+        if self.ignore_confirm_until_release { return None; }
         let swap = self.title_id.as_deref().and_then(|id| settings.game_profile(id)).is_some_and(|p| p.swap_shoulders_and_triggers);
-        crate::native_input::Config { rear: self.rear_touch_enabled(settings), front: self.front_touch_auxiliary_buttons(settings), swap, map: settings.control_map }
+        Some(crate::native_input::Config { rear: self.rear_touch_enabled(settings), front: self.front_touch_auxiliary_buttons(settings), swap, map: settings.control_map })
     }
 
     pub(crate) fn front_touch_auxiliary_buttons(&self, settings: &Settings) -> bool {

@@ -40,7 +40,7 @@ pub async fn run(mut app: App) -> Result<()> {
     let game_controller_subsystem = sdl.game_controller().map_err(anyhow::Error::msg)?;
     let mut controller = open_first_controller(&game_controller_subsystem);
     let joystick_subsystem = sdl.joystick().map_err(anyhow::Error::msg)?;
-    let raw_joystick = joystick_subsystem.open(0).ok();
+    let mut raw_joystick = joystick_subsystem.open(0).ok();
     let mut event_pump = sdl.event_pump().map_err(anyhow::Error::msg)?;
     let mut surface = VitaSurface::new(&video)?;
     let mut audio_renderer =
@@ -137,9 +137,15 @@ pub async fn run(mut app: App) -> Result<()> {
                 && controller.is_none()
             {
                 controller = open_first_controller(&game_controller_subsystem);
+                raw_joystick = joystick_subsystem.open(0).ok();
             }
-            if let Event::ControllerDeviceRemoved { .. } = event {
-                controller = None;
+            if let Event::ControllerDeviceRemoved { which, .. } = event {
+                if controller.as_ref().is_some_and(|c| c.instance_id() == which) {
+                    controller = open_first_controller(&game_controller_subsystem);
+                    raw_joystick = joystick_subsystem.open(0).ok();
+                    rear_touch_buttons = RearTouchButtons::default();
+                    crate::native_input::disable();
+                }
             }
         }
 
@@ -235,7 +241,7 @@ pub async fn run(mut app: App) -> Result<()> {
         if audio_session_active && !active { audio_renderer.clear_session(); }
         audio_session_active = active;
         let native_config = match &app.state {
-            AppState::Streaming(s) if !s.paused && app.settings.native_input_worker => Some(s.native_config(&app.settings)),
+            AppState::Streaming(s) if !s.paused && app.settings.native_input_worker => s.native_config(&app.settings),
             _ => None,
         };
         crate::native_input::configure(native_config);
@@ -354,6 +360,7 @@ fn send_stream_gamepad_state(
     };
 
     // Back is relayed separately after the hold gesture resolves.
+    if relay_back_as_view { crate::native_input::suppress_for(Duration::from_millis(20)); }
     frame.view = f32::from(relay_back_as_view);
     streaming.send_gamepad_frame(frame, settings);
 }

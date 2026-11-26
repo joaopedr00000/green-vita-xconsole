@@ -254,9 +254,8 @@ impl MsalAuth {
     fn save_refresh_token(&mut self, refresh_token: String) {
         self.refresh_token = Some(refresh_token.clone());
 
-        let result = persist_refresh_token(&refresh_token);
-        if let Err(error) = result {
-            eprintln!("Could not persist xCloud login: {error:#}");
+        if persist_refresh_token(&refresh_token).is_err() {
+            crate::diagnostics::step("token_vault", "SAVE_FAILED_RETAINED");
         }
     }
 
@@ -685,27 +684,32 @@ fn persist_refresh_token(refresh_token: &str) -> Result<()> {
         file.sync_all()?;
     }
     verify_token_at(TOKEN_STORE_STAGE, refresh_token)?;
-    // Prefer atomic replacement. On filesystems that reject overwrite-renames,
-    // preserve the existing file as a recoverable backup before installing.
-    if std::fs::rename(TOKEN_STORE_STAGE, TOKEN_STORE_PATH).is_err() {
-        if std::path::Path::new(TOKEN_STORE_PATH).exists() {
-            if std::path::Path::new(TOKEN_STORE_BACKUP).exists() {
-                // Never remove the only previously valid backup.
-                if read_token_at(TOKEN_STORE_PATH).ok().flatten().is_none() {
-                    bail!("primary invalid; existing recovery backup retained");
-                }
+    // Retain a recoverable old file until the installed replacement is authenticated.
+    if std::path::Path::new(TOKEN_STORE_PATH).exists() {
+        if std::path::Path::new(TOKEN_STORE_BACKUP).exists() {
+            if read_token_at(TOKEN_STORE_PATH).ok().flatten().is_some() {
                 std::fs::remove_file(TOKEN_STORE_BACKUP)?;
+                std::fs::rename(TOKEN_STORE_PATH, TOKEN_STORE_BACKUP)?;
+            } else {
+                // The backup is the known recovery copy; remove only the unusable primary.
+                if read_token_at(TOKEN_STORE_BACKUP).ok().flatten().is_none() { bail!("no verified recovery copy"); }
+                std::fs::remove_file(TOKEN_STORE_PATH)?;
             }
+        } else {
             std::fs::rename(TOKEN_STORE_PATH, TOKEN_STORE_BACKUP)?;
         }
-        if let Err(error) = std::fs::rename(TOKEN_STORE_STAGE, TOKEN_STORE_PATH) {
-            if !std::path::Path::new(TOKEN_STORE_PATH).exists() {
-                let _ = std::fs::rename(TOKEN_STORE_BACKUP, TOKEN_STORE_PATH);
-            }
-            return Err(error).context("install staged vault");
-        }
     }
-    verify_token_at(TOKEN_STORE_PATH, refresh_token)?;
+    if let Err(error) = std::fs::rename(TOKEN_STORE_STAGE, TOKEN_STORE_PATH) {
+        if !std::path::Path::new(TOKEN_STORE_PATH).exists() { let _ = std::fs::rename(TOKEN_STORE_BACKUP, TOKEN_STORE_PATH); }
+        return Err(error).context("install staged vault");
+    }
+    if let Err(error) = verify_token_at(TOKEN_STORE_PATH, refresh_token) {
+        if std::path::Path::new(TOKEN_STORE_BACKUP).exists() {
+            let _ = std::fs::remove_file(TOKEN_STORE_PATH);
+            let _ = std::fs::rename(TOKEN_STORE_BACKUP, TOKEN_STORE_PATH);
+        }
+        return Err(error);
+    }
     let _ = std::fs::remove_file(TOKEN_STORE_BACKUP);
     crate::diagnostics::step("token_vault", "VERIFIED_AES256_GCM");
     Ok(())
@@ -839,4 +843,22 @@ fn decode_hex_digit(digit: u8) -> Result<u8> {
 
 fn urlencode(value: &str) -> String {
     value.replace(' ', "%20")
+}
+
+#[cfg(test)]
+mod vault_crypto_tests {
+    use super::*;
+    #[test]
+    fn algorithms_roundtrip_and_reject_modified_data() {
+        for version in [1,2] {
+            let key = [42u8;32]; let nonce = [7u8;12];
+            let aad = if version == 1 { TOKEN_AAD } else { TOKEN_AAD_V2 };
+            let mut data = b"synthetic credential".to_vec();
+            let cipher = token_cipher(&key,version).unwrap();
+            cipher.seal_in_place_append_tag(Nonce::assume_unique_for_key(nonce),Aad::from(aad),&mut data).unwrap();
+            let mut tampered = data.clone(); tampered[0] ^= 1;
+            assert!(cipher.open_in_place(Nonce::assume_unique_for_key(nonce),Aad::from(aad),&mut tampered).is_err());
+            assert_eq!(cipher.open_in_place(Nonce::assume_unique_for_key(nonce),Aad::from(aad),&mut data).unwrap(),b"synthetic credential");
+        }
+    }
 }

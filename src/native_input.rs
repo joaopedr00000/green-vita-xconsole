@@ -8,6 +8,8 @@ pub struct Config { pub rear: bool, pub front: bool, pub swap: bool, pub map: [u
 struct State { config: Option<Config>, sample: Option<(GamepadFrame, Instant)>, generation: u64 }
 static STATE: Mutex<State> = Mutex::new(State { config: None, sample: None, generation: 0 });
 static STARTED: OnceLock<bool> = OnceLock::new();
+static SUPPRESS_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
+pub fn suppress_for(duration: Duration) { if let Ok(mut until) = SUPPRESS_UNTIL.lock() { *until = Some(Instant::now() + duration); } }
 
 pub fn configure(config: Option<Config>) {
     if let Ok(mut s) = STATE.lock() {
@@ -22,6 +24,7 @@ pub fn configure(config: Option<Config>) {
 }
 pub fn disable() { configure(None); }
 pub fn latest() -> Option<(GamepadFrame, Instant)> {
+    if SUPPRESS_UNTIL.try_lock().ok()?.is_some_and(|until| until > Instant::now()) { return None; }
     let s = STATE.try_lock().ok()?;
     s.sample.as_ref().filter(|(_, at)| at.elapsed() < Duration::from_millis(100)).cloned()
 }
@@ -54,8 +57,8 @@ mod vita {
     #[derive(Default)]
     pub struct TouchData { pub timestamp:u64, pub status:u32, pub count:u32, pub reports:[Touch;8] }
     #[repr(C)]
-    #[derive(Default)]
     pub struct Panel { pub min_x:i16,pub min_y:i16,pub max_x:i16,pub max_y:i16,pub rest:[u8;40] }
+    impl Default for Panel { fn default() -> Self { Self { min_x:0,min_y:0,max_x:0,max_y:0,rest:[0;40] } } }
     #[link(name="SceCtrl_stub", kind="static")]
     unsafe extern "C" {
         pub fn sceCtrlPeekBufferPositive(port:i32,pad:*mut Pad,count:i32)->i32;

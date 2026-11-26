@@ -291,8 +291,9 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
                 row_index += 1;
 
                 ui.separator();
-                ui.heading("Controller mapping");
-                if checkbox_row(ui, selected_index == row_index, app.settings.native_input_worker, "Independent native input (experimental)".to_owned()) {
+                let pt = app.settings.locale.as_str().starts_with("pt");
+                ui.heading(if pt { "Mapeamento dos controles" } else { "Controller mapping" });
+                if checkbox_row(ui, selected_index == row_index, app.settings.native_input_worker, (if pt { "Leitura nativa independente (experimental)" } else { "Independent native input (experimental)" }).to_owned()) {
                     commands.push(Command::SetNativeInput(!app.settings.native_input_worker).into());
                 }
                 row_index += 1;
@@ -304,7 +305,7 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
                     }
                     row_index += 1;
                 }
-                if focus_row(ui, selected_index == row_index, "Restore default controls") {
+                if focus_row(ui, selected_index == row_index, if pt { "Restaurar controles padrão" } else { "Restore default controls" }) {
                     commands.push(Command::ResetControls.into());
                 }
                 row_index += 1;

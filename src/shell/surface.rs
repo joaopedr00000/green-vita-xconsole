@@ -78,7 +78,12 @@ impl VitaSurface {
             anyhow::bail!("decoder returned invalid direct texture index {index}");
         }
         if let Some(output) = &self.direct_video_output {
-            output.mark_displayed(index, frame.generation);
+            if !output.mark_displayed(index, frame.generation) {
+                // The decoder already replaced this pending image; wait for the newer generation.
+                crate::streaming::video::metrics::METRICS.skipped.fetch_add(1, Ordering::Relaxed);
+                self.last_frame_id = frame_id;
+                return Ok(());
+            }
         }
         self.displayed_video_texture = Some(index);
         self.pending_display_timestamps = Some((frame.decoded_at, frame.enqueued_at));

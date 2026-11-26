@@ -78,26 +78,23 @@ impl DirectVideoOutput {
         self.frame_displayed.notify_all();
     }
 
-    pub(crate) fn mark_displayed(&self, index: usize, generation: u64) {
-        let mut cleared_pending = false;
-        if let Ok(mut state) = self.state.lock() {
-            state.displayed = Some(index);
-            if state.pending == Some((index, generation)) {
-                state.pending = None;
-                cleared_pending = true;
-            }
-        }
-        if cleared_pending {
-            self.frame_displayed.notify_one();
-        }
+    pub(crate) fn mark_displayed(&self, index: usize, generation: u64) -> bool {
+        let Ok(mut state) = self.state.lock() else { return false; };
+        if state.pending != Some((index, generation)) { return false; }
+        state.displayed = Some(index);
+        state.pending = None;
+        drop(state);
+        self.frame_displayed.notify_one();
+        true
     }
 
-    pub(super) fn lock_decode_target(&self) -> Option<DirectVideoTargetGuard<'_>> {
+    pub(super) fn lock_decode_target(&self, catch_up: bool) -> Option<DirectVideoTargetGuard<'_>> {
         let mut state = self.state.lock().ok()?;
         if state.pending.is_some() {
+            let wait = if catch_up && state.displayed.is_some() { Duration::from_millis(16) } else { MAX_PENDING_TEXTURE_WAIT };
             let (waited_state, _) = self
                 .frame_displayed
-                .wait_timeout_while(state, MAX_PENDING_TEXTURE_WAIT, |state| {
+                .wait_timeout_while(state, wait, |state| {
                     state.targets.is_some() && state.pending.is_some()
                 })
                 .ok()?;

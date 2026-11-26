@@ -1,0 +1,29 @@
+name: Build GreenVita 0.3.2 performance candidate
+on:
+  push:
+    branches: [vita-v0.3.2-performance]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: green-vita-v032-candidate
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/vita-rust/vitasdk-rs:latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Compile candidate VPK
+        env:
+          RUSTFLAGS: "-C target-feature=-neon"
+        run: cargo vita build vpk --release
+      - name: Upload test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: GreenVita-0.3.2-candidate
+          path: target/armv7-sony-vita-newlibeabihf/release/green-vita.vpk
+          if-no-files-found: error

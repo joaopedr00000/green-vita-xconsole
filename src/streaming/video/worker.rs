@@ -175,6 +175,7 @@ fn run_decode_loop(
                     &result_ready,
                     access_unit,
                     &direct_output,
+                    !access_units.is_empty(),
                 );
             }
         }
@@ -189,6 +190,7 @@ fn decode_queued_access_unit(
     result_ready: &tokio::sync::Notify,
     access_unit: QueuedAccessUnit,
     direct_output: &DirectVideoOutput,
+    queued_more: bool,
 ) {
     if access_unit.generation != generation.load(Ordering::Acquire) {
         return;
@@ -208,7 +210,10 @@ fn decode_queued_access_unit(
         }
     }
 
-    let Some(direct_target) = direct_output.lock_decode_target() else {
+    // Only shorten the wait for already-decoded display output. Never skip
+    // compressed reference units, and retain the original wait after a resync.
+    let catch_up = queued_more && access_unit.generation == 0 && access_unit.queued_at.elapsed() >= std::time::Duration::from_millis(50);
+    let Some(direct_target) = direct_output.lock_decode_target(catch_up) else {
         // Do not decode until the renderer has registered its two GXM textures. There is no
         // legacy output buffer to copy from anymore.
         metrics::METRICS.skipped.fetch_add(1, Ordering::Relaxed);

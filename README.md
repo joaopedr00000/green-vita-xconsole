@@ -192,3 +192,5 @@ GreenVita is licensed under the [Mozilla Public License 2.0](LICENSE).
 ## 0.3.2 development candidate
 
 Based on v0.3.1 Final. AES-256-GCM token vault with legacy migration, bounded deferred diagnostics, adaptive PCM queue and stale-controller neutralization. Physical Vita validation is required before declaring a stable release. Do not share token, backup or stage files.
+
+The candidate also includes optional independent 4 ms native handheld polling, button remapping, hotplug handling, lifecycle interruption recovery, focused artwork loading, measured compressed queue age, and adaptive RTP reordering. Native polling is disabled by default pending hardware tests. The 0.3.1 release remains the stable rollback.

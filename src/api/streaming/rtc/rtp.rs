@@ -26,6 +26,7 @@ const HIGH_FPS_DAMAGE_LIMIT: u8 = 3;
 #[derive(Default)]
 pub(super) struct VideoSampleStats {
     pub dropped: u32,
+    pub recovered_after_wait: u32,
     pub source_frame_duration_us: Option<u64>,
     pub encoded_resolution: Option<(u32, u32)>,
 }
@@ -33,6 +34,7 @@ pub(super) struct VideoSampleStats {
 impl VideoSampleStats {
     fn merge(&mut self, other: Self) {
         self.dropped = self.dropped.saturating_add(other.dropped);
+        self.recovered_after_wait = self.recovered_after_wait.saturating_add(other.recovered_after_wait);
         if other.source_frame_duration_us.is_some() {
             self.source_frame_duration_us = other.source_frame_duration_us;
         }
@@ -307,6 +309,11 @@ impl VideoRtp {
             } => (data, marker_sequence),
         };
         let completed = self.pending.take().expect("assembled pending video frame");
+        // A completed old frame while newer packets were held is actual evidence
+        // that waiting preserved an access unit, rather than merely observing loss.
+        if !self.held_future.is_empty() && self.held_future[0].header.timestamp != completed.timestamp {
+            stats.recovered_after_wait = 1;
+        }
         // Record both average and worst-case RTP assembly time for the stream HUD.
         let assembly_us = completed.first_packet_at.elapsed().as_micros() as u64;
         crate::streaming::video::metrics::METRICS

@@ -54,6 +54,9 @@ pub(crate) struct VideoReceiver {
     profile: StreamProfile,
     last_status_damage: (u64, u64),
     clean_status_seconds: u32,
+    reorder_ms: u64,
+    reorder_last_adjust: Instant,
+    reorder_saved: u32,
 }
 
 impl VideoReceiver {
@@ -83,6 +86,9 @@ impl VideoReceiver {
             profile: active_stream_profile(),
             last_status_damage: (0, 0),
             clean_status_seconds: 0,
+            reorder_ms: 32,
+            reorder_last_adjust: Instant::now(),
+            reorder_saved: 0,
         })
     }
 
@@ -100,6 +106,9 @@ impl VideoReceiver {
         self.last_nack_report = None;
         self.last_rtp_arrival = None;
         self.jitter_us = 0;
+        self.reorder_ms = reorder_bounds(self.profile).0;
+        self.reorder_saved = 0;
+        self.reorder_last_adjust = Instant::now();
     }
 
     pub(crate) fn handles(&self, track_id: &MediaStreamTrackId) -> bool {
@@ -114,17 +123,18 @@ impl VideoReceiver {
         let now = Instant::now();
         self.observe_rtp_jitter(now, packet.header.timestamp);
         self.record_video_sequence(packet.header.sequence_number, now);
-        let jitter_ms = self.jitter_us / 1_000;
-        // Keep RTP packets in decoding order. Quality favors resilience;
-        // low-latency narrows but never disables the H264 recovery window.
-        let grace_ms = match self.profile {
-            StreamProfile::LowLatency => (16 + jitter_ms / 2).clamp(16, 24),
-            StreamProfile::Balanced => (24 + jitter_ms).clamp(24, 40),
-            StreamProfile::Quality => (32 + jitter_ms).clamp(32, 48),
-        };
-        self.rtp.set_reorder_grace_ms(grace_ms);
+        let (floor, ceiling) = reorder_bounds(self.profile);
+        self.reorder_ms = self.reorder_ms.clamp(floor, ceiling);
+        if self.reorder_last_adjust.elapsed() >= Duration::from_secs(1) {
+            self.reorder_ms = if self.reorder_saved > 0 { (self.reorder_ms + 4).min(ceiling) }
+                else { self.reorder_ms.saturating_sub(2).max(floor) };
+            self.reorder_saved = 0;
+            self.reorder_last_adjust = now;
+        }
+        self.rtp.set_reorder_grace_ms(self.reorder_ms);
         self.bitrate.packet_received();
         let sample_stats = self.rtp.receive(&self.decoder, packet, keyframe_requested);
+        self.reorder_saved = self.reorder_saved.saturating_add(sample_stats.recovered_after_wait);
         self.stats.dropped = self
             .stats
             .dropped
@@ -334,13 +344,14 @@ impl VideoReceiver {
             .map(|(width, height)| format!("{width}x{height}"))
             .unwrap_or_else(|| "?".to_owned());
         Some(format!(
-            "enc:{encoded_resolution} srcfps:{source_fps} {performance} rx:{rx_mbps:.1}Mbps remb:{:.1}Mbps jitter:{}ms gaps:{} late:{} nack:{}/{} wait:{} drop:{} err:{}",
+            "enc:{encoded_resolution} srcfps:{source_fps} {performance} rx:{rx_mbps:.1}Mbps remb:{:.1}Mbps jitter:{}ms gaps:{} late:{} nack:{}/{} reorder:{}ms wait:{} drop:{} err:{}",
             self.bitrate.current_mbps(),
             self.jitter_us / 1_000,
             self.stats.detected_sequence_gaps,
             self.stats.recovered_or_late_packets,
             self.stats.nack_requests,
             self.stats.nack_packets,
+            self.reorder_ms,
             u8::from(self.rtp.waiting_for_keyframe()),
             self.stats.dropped,
             self.stats.decode_errors,
@@ -374,4 +385,8 @@ impl AudioReceiver {
     pub(crate) fn receive(&mut self, packet: Packet) {
         self.rtp.receive(packet, &mut self.packets);
     }
+}
+
+fn reorder_bounds(profile: StreamProfile) -> (u64,u64) {
+    match profile { StreamProfile::LowLatency => (16,24), StreamProfile::Balanced => (24,40), StreamProfile::Quality => (32,48) }
 }
