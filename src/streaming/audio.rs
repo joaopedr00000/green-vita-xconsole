@@ -113,6 +113,7 @@ pub struct AudioRenderer {
     low_water_ms:u32,
     last_arrival:Option<Instant>,
     arrival_gap_us:u64,
+    refill_period_bytes:u32,
 }
 
 impl AudioRenderer {
@@ -133,6 +134,10 @@ impl AudioRenderer {
                 spec.freq, spec.channels, AUDIO_SAMPLE_RATE, AUDIO_CHANNELS
             );
         }
+        // Keep the negotiated device period unchanged. A refill of at least
+        // one period can continue playback without an avoidable pause.
+        let refill_period_bytes=u32::from(spec.samples.max(1))*AUDIO_CHANNELS as u32*2;
+        crate::streaming::video::metrics::AUDIO_DEVICE_PERIOD_US.store(u64::from(spec.samples)*1_000_000/(spec.freq.max(1) as u64),Ordering::Relaxed);
         let (packets_tx, samples_rx) = spawn_decode_worker()?;
 
         Ok(Self {
@@ -146,7 +151,7 @@ impl AudioRenderer {
             fade_next_packet: true,
             retry_worker_after: Instant::now(),
             worker_ready: true,
-            low_water_ms:u32::MAX,last_arrival:None,arrival_gap_us:0,
+            low_water_ms:u32::MAX,last_arrival:None,arrival_gap_us:0,refill_period_bytes,
         })
     }
 
@@ -156,32 +161,17 @@ impl AudioRenderer {
             if !self.worker_ready { return; }
         }
         let now=Instant::now();
-        let queued_ms=self.queue.size().saturating_mul(1000)/AUDIO_BYTES_PER_SECOND;
+        let queued_bytes=self.queue.size();
+        let queued_ms=queued_bytes.saturating_mul(1000)/AUDIO_BYTES_PER_SECOND;
+        let was_started=self.started;
+        let empty_at_entry=was_started && queued_bytes==0;
+        let mut refilling=empty_at_entry;
+        if empty_at_entry{self.fade_next_packet=true;}
         if self.started{self.low_water_ms=self.low_water_ms.min(queued_ms);}
         if !packets.is_empty(){
             if let Some(at)=self.last_arrival{let us=now.saturating_duration_since(at).as_micros().min(1_000_000) as u64;self.arrival_gap_us=(self.arrival_gap_us.saturating_mul(7)+us)/8;}
             self.last_arrival=Some(now);
         }
-        if self.started && self.queue.size() == 0 {
-            self.queue.pause();
-            self.started = false;
-            // Interruption: increase headroom temporarily rather than repeatedly clearing PCM.
-            self.prebuffer_ms = (self.prebuffer_ms + 10).min(110);
-            self.last_underrun = Instant::now();
-            self.last_adjustment = Instant::now();
-            self.low_water_ms=u32::MAX;
-            METRICS.audio_underruns.fetch_add(1, Ordering::Relaxed);
-            self.fade_next_packet = true;
-        }
-        if self.last_underrun.elapsed() >= Duration::from_secs(30)
-            && self.last_adjustment.elapsed() >= Duration::from_secs(30) {
-            let mode=crate::settings::latency_mode();
-            let floor=super::policy::audio_floor_ms(mode,baseline_ms());
-            self.prebuffer_ms=if mode==2{super::policy::audio_next_target_ms(self.prebuffer_ms,floor,self.started,self.low_water_ms)}else{self.prebuffer_ms.saturating_sub(5).max(floor)};
-            self.low_water_ms=u32::MAX;
-            self.last_adjustment=Instant::now();
-        }
-        METRICS.audio_target_ms.store(self.prebuffer_ms as u64, Ordering::Relaxed);
 
         for packet in packets {
             match self.packets_tx.try_send(packet) {
@@ -203,11 +193,10 @@ impl AudioRenderer {
             match self.samples_rx.try_recv() {
                 Ok(mut samples) => {
                     let queued=self.queue.size().saturating_mul(1000)/AUDIO_BYTES_PER_SECOND;
-                    let trim=super::policy::audio_rate_trim_frames(crate::settings::latency_mode(),self.started,queued,self.prebuffer_ms,samples.len()/AUDIO_CHANNELS);
-                    if trim>0 {
-                        let removed=super::policy::shorten_stereo_pcm(&mut samples,trim);
-                        crate::streaming::video::metrics::AUDIO_TRIM_FRAMES.fetch_add(removed as u64,Ordering::Relaxed);
-                    }
+                    // Never speed up audio during a refill or just after startup.
+                    if self.started && queued==0{refilling=true;self.fade_next_packet=true;}
+                    let trim=super::policy::audio_rate_trim_frames(crate::settings::latency_mode(),self.started && !refilling,queued,self.prebuffer_ms,samples.len()/AUDIO_CHANNELS);
+                    let removed=if trim>0{super::policy::shorten_stereo_pcm(&mut samples,trim)}else{0};
                     let sample_bytes = (samples.len() * size_of::<i16>()) as u32;
                     if self.queue.size().saturating_add(sample_bytes) > pcm_queue_cap_bytes(self.prebuffer_ms) {
                         // Discard this *new* PCM packet, never abruptly clear already queued
@@ -228,10 +217,12 @@ impl AudioRenderer {
                     }
                     if let Err(error) = self.queue.queue_audio(&samples) {
                         let _ = error;
+                        METRICS.audio_drops.fetch_add(1,Ordering::Relaxed);
                         crate::diagnostics::step("audio", "OUTPUT_QUEUE_FAILED");
                         self.fade_next_packet = true;
                         continue;
                     }
+                    crate::streaming::video::metrics::AUDIO_TRIM_FRAMES.fetch_add(removed as u64,Ordering::Relaxed);
                     if !self.started && self.queue.size() >= AUDIO_BYTES_PER_SECOND * self.prebuffer_ms / 1_000 {
                         self.queue.resume();
                         self.started = true;
@@ -245,6 +236,33 @@ impl AudioRenderer {
                 }
             }
         }
+        // An empty SDL software queue is not proof of a hardware underrun.
+        // Drain decoded PCM first. If one device period is available again,
+        // continue playback; only pause/rebuffer when the refill is insufficient.
+        let queued_after=self.queue.size();
+        if self.started && (refilling || queued_after==0){
+            self.low_water_ms=0;
+            if super::policy::audio_refill_sufficient(queued_after,self.refill_period_bytes){
+                crate::streaming::video::metrics::AUDIO_REFILLS.fetch_add(1,Ordering::Relaxed);
+            }else{
+                self.queue.pause();
+                self.started=false;
+                self.prebuffer_ms=(self.prebuffer_ms+10).min(110);
+                self.last_underrun=Instant::now();
+                self.last_adjustment=Instant::now();
+                self.low_water_ms=u32::MAX;
+                METRICS.audio_underruns.fetch_add(1,Ordering::Relaxed);
+                self.fade_next_packet=true;
+            }
+        }
+        if self.last_underrun.elapsed()>=Duration::from_secs(30) && self.last_adjustment.elapsed()>=Duration::from_secs(30){
+            let mode=crate::settings::latency_mode();
+            let floor=super::policy::audio_floor_ms(mode,baseline_ms());
+            self.prebuffer_ms=super::policy::audio_next_target_ms(self.prebuffer_ms,floor,self.started,self.low_water_ms);
+            self.low_water_ms=u32::MAX;
+            self.last_adjustment=Instant::now();
+        }
+        METRICS.audio_target_ms.store(self.prebuffer_ms as u64,Ordering::Relaxed);
         crate::streaming::video::metrics::AUDIO_QUEUED_MS.store((self.queue.size() as u64)*1000/(AUDIO_BYTES_PER_SECOND as u64),Ordering::Relaxed);
         crate::streaming::video::metrics::AUDIO_ARRIVAL_US.store(self.arrival_gap_us,Ordering::Relaxed);
     }
@@ -255,6 +273,8 @@ impl AudioRenderer {
         crate::streaming::video::metrics::AUDIO_QUEUED_MS.store(0,Ordering::Relaxed);
         crate::streaming::video::metrics::AUDIO_ARRIVAL_US.store(0,Ordering::Relaxed);
         crate::streaming::video::metrics::AUDIO_TRIM_FRAMES.store(0,Ordering::Relaxed);
+        crate::streaming::video::metrics::AUDIO_REFILLS.store(0,Ordering::Relaxed);
+        METRICS.audio_target_ms.store(self.prebuffer_ms as u64,Ordering::Relaxed);
         self.last_underrun = Instant::now();
         self.last_adjustment = Instant::now();
         self.retire_decode_worker();
@@ -302,6 +322,7 @@ fn spawn_decode_worker() -> Result<(SyncSender<Bytes>, Receiver<Vec<i16>>)> {
                 let samples_per_channel = match decoder.decode(&packet, &mut decode_buf) {
                     Ok(samples_per_channel) => samples_per_channel,
                     Err(error) => {
+                        METRICS.audio_drops.fetch_add(1,Ordering::Relaxed);
                         eprintln!("Failed to decode Opus audio packet: {error}");
                         continue;
                     }

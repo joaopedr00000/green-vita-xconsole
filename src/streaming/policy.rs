@@ -123,8 +123,8 @@ mod refinements{
 /// Very small rate correction only with excess queued audio. Preserve a
 /// generous deadband and never accelerate startup or an underrun recovery.
 pub fn audio_rate_trim_frames(mode:u8,started:bool,queued_ms:u32,target_ms:u32,frames:usize)->usize {
-    if mode!=2 || !started || queued_ms<target_ms.saturating_add(12) || frames<128{return 0;}
-    let percent=if queued_ms>=target_ms.saturating_add(25){2}else{1};
+    if mode!=2 || !started || queued_ms<target_ms.saturating_add(8) || frames<128{return 0;}
+    let percent=if queued_ms>=target_ms.saturating_add(20){2}else{1};
     frames.saturating_mul(percent)/100
 }
 /// In-place stereo-preserving interpolation. Read positions never precede
@@ -152,9 +152,10 @@ pub fn shorten_stereo_pcm(samples:&mut Vec<i16>,trim_frames:usize)->usize{
 mod audio_trim_tests{
     use super::*;
     #[test]fn trim_is_bounded_and_uses_headroom(){
-        assert_eq!(audio_rate_trim_frames(2,true,71,60,960),0);
-        assert_eq!(audio_rate_trim_frames(2,true,72,60,960),9);
-        assert_eq!(audio_rate_trim_frames(2,true,85,60,960),19);
+        assert_eq!(audio_rate_trim_frames(2,true,67,60,960),0);
+        assert_eq!(audio_rate_trim_frames(2,true,68,60,960),9);
+        assert_eq!(audio_rate_trim_frames(2,true,79,60,960),9);
+        assert_eq!(audio_rate_trim_frames(2,true,80,60,960),19);
         assert_eq!(audio_rate_trim_frames(2,false,100,60,960),0);
         assert_eq!(audio_rate_trim_frames(0,true,100,60,960),0);
     }
@@ -165,4 +166,12 @@ mod audio_trim_tests{
         assert!(s.chunks_exact(2).all(|p|p[0]==-p[1]));
         assert_eq!(shorten_stereo_pcm(&mut s,100),0);
     }
+}
+
+/// Refill only with a complete negotiated device period; no claim about DAC state.
+pub fn audio_refill_sufficient(queued_bytes:u32,period_bytes:u32)->bool{period_bytes>0 && queued_bytes>=period_bytes}
+#[cfg(test)]
+mod audio_refill_tests{
+    use super::*;
+    #[test]fn period_required(){assert!(!audio_refill_sufficient(0,4096));assert!(!audio_refill_sufficient(4095,4096));assert!(audio_refill_sufficient(4096,4096));assert!(audio_refill_sufficient(8192,4096));assert!(!audio_refill_sufficient(4096,0));}
 }

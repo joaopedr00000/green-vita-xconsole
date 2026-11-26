@@ -13,6 +13,8 @@ pub(crate) static IDLE_SWAPS_SAVED:AtomicU64=AtomicU64::new(0);
 pub(crate) static AUDIO_QUEUED_MS:AtomicU64=AtomicU64::new(0);
 pub(crate) static AUDIO_ARRIVAL_US:AtomicU64=AtomicU64::new(0);
 pub(crate) static AUDIO_TRIM_FRAMES:AtomicU64=AtomicU64::new(0);
+pub(crate) static AUDIO_REFILLS:AtomicU64=AtomicU64::new(0);
+pub(crate) static AUDIO_DEVICE_PERIOD_US:AtomicU64=AtomicU64::new(0);
 pub(crate) static TELEMETRY_MISSED:AtomicU64=AtomicU64::new(0);
 pub(crate) fn presented(stages:PresentedStages){if let Ok(mut s)=STAGES.try_lock(){s.last=Some(stages);s.sum=s.sum.saturating_add(stages.total_us);s.max=s.max.max(stages.total_us);s.count+=1;if s.totals.len()<256{s.totals.push(stages.total_us);}if stages.present_gap_us>0 && s.gaps.len()<256{s.gaps.push(stages.present_gap_us);}}else{TELEMETRY_MISSED.fetch_add(1,Ordering::Relaxed);}}
 pub(crate) fn clear_stages(){if let Ok(mut s)=STAGES.lock(){*s=StageWindow::default();}QUEUE_DEPTH.store(0,Ordering::Relaxed);STALE_HANDOFFS.store(0,Ordering::Relaxed);OUTPUT_REPLACEMENTS.store(0,Ordering::Relaxed);CATCH_UP_REPLACEMENTS.store(0,Ordering::Relaxed);FRAME_WAKES.store(0,Ordering::Relaxed);IDLE_SWAPS_SAVED.store(0,Ordering::Relaxed);TELEMETRY_MISSED.store(0,Ordering::Relaxed);}
