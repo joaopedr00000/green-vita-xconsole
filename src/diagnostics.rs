@@ -12,6 +12,7 @@ const MAX_EVENTS: usize = 512;
 const QUEUE_CAPACITY: usize = 128;
 static SENDER: OnceLock<Option<SyncSender<String>>> = OnceLock::new();
 static DROPPED: AtomicU64 = AtomicU64::new(0);
+static LAST_METRIC: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
 
 /// A short status line; no dynamic user-provided data is accepted.
 pub(crate) fn step(stage: &'static str, result: &'static str) {
@@ -84,6 +85,11 @@ pub(crate) fn video_resolution(width: u32, height: u32) {
 
 /// Only aggregate numeric measurements produced locally, never remote text.
 pub(crate) fn metrics(rx_kbps: u64, jitter_us: u64, gaps: u64, late: u64, drops: u64, errors: u64) {
+    // HUD remains live; disk telemetry is sampled only once per five seconds.
+    let Ok(mut last) = LAST_METRIC.try_lock() else { return; };
+    if last.is_some_and(|at| at.elapsed() < Duration::from_secs(5)) { return; }
+    *last = Some(Instant::now());
+    drop(last);
     let m = &crate::streaming::video::metrics::METRICS;
     write_record("stream_metrics", &format!(
         "rx_kbps={rx_kbps} jitter_us={jitter_us} gaps={gaps} late={late} drops={drops} errors={errors} input_us={} display_us={} pipe_us={} audio_ms={} audio_drops={}",
@@ -99,18 +105,37 @@ pub(crate) fn initialize() {
             let _ = std::fs::create_dir_all(DIR);
             let started = Instant::now();
             let epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-            let mut records = std::collections::VecDeque::with_capacity(MAX_EVENTS);
+            use std::io::Write;
             let mut sequence = 0u64;
+            let mut segment_count = 0usize;
+            let mut file: Option<std::fs::File> = None;
             while let Ok(first) = rx.recv() {
                 for record in std::iter::once(first).chain(rx.try_iter().take(QUEUE_CAPACITY)) {
+                    if file.is_none() || segment_count >= MAX_EVENTS {
+                        // Two bounded segments; keep the previous segment through rotation.
+                        file.take();
+                        let previous = format!("{FILE}.previous");
+                        if segment_count >= MAX_EVENTS {
+                            let _ = std::fs::remove_file(&previous);
+                            let _ = std::fs::rename(FILE, &previous);
+                        }
+                        let _ = std::fs::remove_file(FILE);
+                        file = std::fs::File::create(FILE).ok();
+                        segment_count = 0;
+                        if let Some(out) = file.as_mut() {
+                            if writeln!(out,"GreenVita {} | UTC epoch {} | redacted local diagnostics",env!("CARGO_PKG_VERSION"),epoch).is_err() { file = None; }
+                        }
+                    }
                     sequence = sequence.saturating_add(1);
-                    if records.len() == MAX_EVENTS { records.pop_front(); }
-                    records.push_back(format!("  {} +{}ms {}", sequence, started.elapsed().as_millis(), record));
+                    if let Some(out) = file.as_mut() {
+                        if writeln!(out,"  {} +{}ms dropped={} {}",sequence,started.elapsed().as_millis(),DROPPED.load(Ordering::Relaxed),record).is_ok() {
+                            segment_count += 1;
+                        } else { file = None; }
+                    }
                 }
-                let mut output = format!("GreenVita {} | UTC epoch {} | redacted local diagnostics\nDropped queue records: {}\n", env!("CARGO_PKG_VERSION"), epoch, DROPPED.load(Ordering::Relaxed));
-                for line in &records { output.push_str(line); output.push('\n'); }
-                let _ = crate::fs_utils::write_file_truncating(FILE, output.as_bytes());
-                std::thread::sleep(Duration::from_millis(100));
+                if let Some(out) = file.as_mut() { let _ = out.flush(); }
+                // Back off on unavailable storage, not the stream producer.
+                if file.is_none() { std::thread::sleep(Duration::from_secs(2)); }
             }
         }).ok().map(|_| tx)
     });

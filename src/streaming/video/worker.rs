@@ -212,7 +212,9 @@ fn decode_queued_access_unit(
 
     // Only shorten the wait for already-decoded display output. Never skip
     // compressed reference units, and retain the original wait after a resync.
-    let catch_up = queued_more && access_unit.generation == 0 && access_unit.queued_at.elapsed() >= std::time::Duration::from_millis(50);
+    let catch_up = crate::streaming::policy::should_catch_up(
+        crate::settings::active_stream_profile() == crate::settings::StreamProfile::LowLatency,
+        queued_more, access_unit.queued_at.elapsed().as_millis(), access_unit.generation);
     let Some(direct_target) = direct_output.lock_decode_target(catch_up) else {
         // Do not decode until the renderer has registered its two GXM textures. There is no
         // legacy output buffer to copy from anymore.

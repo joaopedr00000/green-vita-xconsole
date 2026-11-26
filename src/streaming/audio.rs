@@ -15,9 +15,11 @@ const AUDIO_BYTES_PER_SECOND: u32 = AUDIO_SAMPLE_RATE as u32 * AUDIO_CHANNELS as
 // Keep audio close to live video; the previous 240ms cap made audible events
 // noticeably late after jitter. Retain conservative startup headroom for 2.4GHz.
 fn pcm_queue_cap_bytes(target_ms: u32) -> u32 {
-    AUDIO_BYTES_PER_SECOND * (target_ms.clamp(50, 110) + 40) / 1_000
+    AUDIO_BYTES_PER_SECOND * super::policy::pcm_cap_ms(target_ms) / 1_000
 }
-const AUDIO_START_BUFFER_BYTES: u32 = AUDIO_BYTES_PER_SECOND * 60 / 1_000;
+fn baseline_ms() -> u32 {
+    match active_stream_profile() { StreamProfile::LowLatency => 50, StreamProfile::Balanced => 60, StreamProfile::Quality => 80 }
+}
 const MAX_OPUS_FRAME_SAMPLES_PER_CHANNEL: usize = 5_760;
 const MAX_PENDING_OPUS_PACKETS: usize = 32;
 const MAX_PENDING_PCM_BUFFERS: usize = 8;
@@ -106,6 +108,8 @@ pub struct AudioRenderer {
     last_underrun: Instant,
     last_adjustment: Instant,
     fade_next_packet: bool,
+    retry_worker_after: Instant,
+    worker_ready: bool,
 }
 
 impl AudioRenderer {
@@ -141,10 +145,16 @@ impl AudioRenderer {
             last_underrun: Instant::now(),
             last_adjustment: Instant::now(),
             fade_next_packet: true,
+            retry_worker_after: Instant::now(),
+            worker_ready: true,
         })
     }
 
     pub fn submit_packets(&mut self, packets: Vec<Bytes>) {
+        if !self.worker_ready {
+            if Instant::now() >= self.retry_worker_after { self.restart_decode_worker(); }
+            if !self.worker_ready { return; }
+        }
         if self.started && self.queue.size() == 0 {
             self.queue.pause();
             self.started = false;
@@ -177,7 +187,8 @@ impl AudioRenderer {
                 Err(TrySendError::Disconnected(packet)) => {
                     eprintln!("Audio decode worker stopped; restarting");
                     self.restart_decode_worker();
-                    let _ = self.packets_tx.try_send(packet);
+                    if self.worker_ready { let _ = self.packets_tx.try_send(packet); }
+                    else { break; }
                 }
             }
         }
@@ -197,13 +208,17 @@ impl AudioRenderer {
                         // Fade in the next playable packet to hide the edge of a dropped one.
                         let fade_samples = (AUDIO_SAMPLE_RATE as usize / 200) * AUDIO_CHANNELS;
                         for (index, sample) in samples.iter_mut().take(fade_samples).enumerate() {
-                            let gain = index as f32 / fade_samples as f32;
+                            // The two stereo channels receive the same gain for each frame.
+                            let gain = (index / AUDIO_CHANNELS) as f32 / (fade_samples / AUDIO_CHANNELS) as f32;
                             *sample = (*sample as f32 * gain) as i16;
                         }
                         self.fade_next_packet = false;
                     }
                     if let Err(error) = self.queue.queue_audio(&samples) {
-                        eprintln!("Failed to queue SDL audio: {error}");
+                        let _ = error;
+                        crate::diagnostics::step("audio", "OUTPUT_QUEUE_FAILED");
+                        self.fade_next_packet = true;
+                        continue;
                     }
                     if !self.started && self.queue.size() >= AUDIO_BYTES_PER_SECOND * self.prebuffer_ms / 1_000 {
                         self.queue.resume();
@@ -221,20 +236,36 @@ impl AudioRenderer {
     }
 
     pub fn clear_session(&mut self) {
-        self.restart_decode_worker();
+        self.prebuffer_ms = baseline_ms();
+        self.last_underrun = Instant::now();
+        self.last_adjustment = Instant::now();
+        self.retire_decode_worker();
+        self.retry_worker_after = Instant::now();
+    }
+
+    fn retire_decode_worker(&mut self) {
+        // Disconnect both channels before creating another decoder: no previous
+        // session samples can enter the new SDL queue, even on spawn failure.
+        let (empty_tx, empty_rx) = sync_channel::<Bytes>(1);
+        let (pcm_tx, pcm_rx) = sync_channel::<Vec<i16>>(1);
+        drop(empty_rx); drop(pcm_tx);
+        self.packets_tx = empty_tx;
+        self.samples_rx = pcm_rx;
+        self.queue.pause(); self.queue.clear();
+        self.started = false; self.fade_next_packet = true;
+        self.worker_ready = false;
     }
 
     fn restart_decode_worker(&mut self) {
-        self.queue.pause();
-        self.queue.clear();
-        self.started = false;
-        self.fade_next_packet = true;
+        self.retire_decode_worker();
+        self.retry_worker_after = Instant::now() + Duration::from_secs(2);
         match spawn_decode_worker() {
             Ok((packets_tx, samples_rx)) => {
                 self.packets_tx = packets_tx;
                 self.samples_rx = samples_rx;
+                self.worker_ready = true;
             }
-            Err(error) => eprintln!("Failed to restart audio decode worker: {error:#}"),
+            Err(_) => crate::diagnostics::step("audio", "DECODER_RESTART_FAILED"),
         }
     }
 }

@@ -14,6 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustc --edition=2024 --test src/streaming/input.rs -o /tmp/green-vita-input-tests && /tmp/green-vita-input-tests
+      - run: rustc --edition=2024 --test src/streaming/policy.rs -o /tmp/green-vita-policy-tests && /tmp/green-vita-policy-tests
   build:
     needs: input-policy-tests
     runs-on: ubuntu-latest

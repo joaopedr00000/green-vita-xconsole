@@ -38,6 +38,7 @@ pub struct App {
     pub(crate) title_search_query: String,
     pub(crate) title_search_requested: bool,
     pub(crate) artwork_focus: Option<(String, Instant)>,
+    pub(crate) artwork_retry: HashMap<(String, crate::api::catalog::worker::ImageKind), Instant>,
     /// At most one automatic stream rejoin per user-initiated launch.
     pub(crate) auto_reconnect_used: bool,
     pub(crate) release_update: Arc<Mutex<Option<String>>>,
@@ -66,6 +67,7 @@ impl App {
             title_search_query: String::new(),
             title_search_requested: false,
             artwork_focus: None,
+            artwork_retry: HashMap::new(),
             auto_reconnect_used: false,
             release_update,
             region_ping_ms: Arc::new(Mutex::new(HashMap::new())), 

@@ -216,20 +216,15 @@ impl Settings {
 
     /// Loads from disk, falling back to defaults on any error.
     pub fn load() -> Self {
-        let data = match std::fs::read_to_string(SETTINGS_PATH) {
-            Ok(data) => data,
-            Err(error) => {
-                eprintln!("Settings: no existing {SETTINGS_PATH} ({error}), using defaults");
-                return Self::default();
-            }
-        };
-        match serde_json::from_str(&data) {
-            Ok(settings) => settings,
-            Err(error) => {
-                eprintln!("Settings: failed to parse {SETTINGS_PATH} ({error}), using defaults");
-                Self::default()
+        for path in [SETTINGS_PATH, "ux0:data/xcloud-rust/settings.backup"] {
+            if let Ok(data) = std::fs::read_to_string(path) {
+                if let Ok(mut settings) = serde_json::from_str::<Self>(&data) {
+                    if settings.control_map.iter().any(|v| *v > 16) { settings.control_map = crate::streaming::input::default_control_map(); }
+                    return settings;
+                }
             }
         }
+        Self::default()
     }
 
     /// Saves to disk; errors are logged rather than surfaced.
@@ -239,7 +234,26 @@ impl Settings {
             .and_then(|_| {
                 serde_json::to_string_pretty(self).context("failed to serialize settings")
             })
-            .and_then(|data| crate::fs_utils::write_file_truncating(SETTINGS_PATH, data));
+            .and_then(|data| {
+                use std::io::Write;
+                const STAGE: &str = "ux0:data/xcloud-rust/settings.stage";
+                const BACKUP: &str = "ux0:data/xcloud-rust/settings.backup";
+                let _ = std::fs::remove_file(STAGE);
+                { let mut out = std::fs::OpenOptions::new().write(true).create_new(true).open(STAGE)?; out.write_all(data.as_bytes())?; out.sync_all()?; }
+                let _: Self = serde_json::from_str(&std::fs::read_to_string(STAGE)?)?;
+                if std::fs::rename(STAGE, SETTINGS_PATH).is_err() {
+                    if std::path::Path::new(SETTINGS_PATH).exists() {
+                        let _ = std::fs::remove_file(BACKUP);
+                        std::fs::rename(SETTINGS_PATH, BACKUP)?;
+                    }
+                    if let Err(error) = std::fs::rename(STAGE, SETTINGS_PATH) {
+                        if !std::path::Path::new(SETTINGS_PATH).exists() { let _ = std::fs::rename(BACKUP, SETTINGS_PATH); }
+                        return Err(error.into());
+                    }
+                }
+                let _ = std::fs::remove_file(BACKUP);
+                Ok(())
+            });
 
         if let Err(error) = result {
             eprintln!("Settings: failed to save: {error:#}");

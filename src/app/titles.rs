@@ -25,6 +25,7 @@ impl App {
         url: String,
         prefetch: bool,
     ) {
+        if self.artwork_retry.get(&(title_id.clone(),kind)).is_some_and(|at| *at > std::time::Instant::now()) { return; }
         let cache_locale = self.settings.locale.as_str().to_lowercase();
         let queued = if prefetch {
             self.service.catalog_worker.prefetch_image(
@@ -112,7 +113,8 @@ impl App {
             .enumerate()
             .filter(|(index, _)| title_distance(*index, selected, title_count) <= ICON_CACHE_RADIUS)
             .filter_map(|(index, title)| {
-                if title.icon.is_none() && !icon_pending.contains(&title.id) {
+                if title.icon.is_none() && !icon_pending.contains(&title.id)
+                    && !self.artwork_retry.get(&(title.id.clone(), ImageKind::Icon)).is_some_and(|at| *at > std::time::Instant::now()) {
                     title.details.as_ref()?.icon_url.clone().map(|url| {
                         (
                             title_distance(index, selected, title_count),
@@ -190,6 +192,7 @@ impl App {
     }
 
     pub(super) async fn pump_title_details(&mut self) -> anyhow::Result<()> {
+        self.artwork_retry.retain(|_, until| *until > std::time::Instant::now());
         self.prune_title_images();
         self.ensure_title_details_job();
         self.ensure_icon_prefetch_job();
@@ -223,6 +226,9 @@ impl App {
                         continue;
                     }
                     self.image_pending_set(kind).remove(&game_id);
+                    if image.is_none() && self.artwork_retry.len() < 256 {
+                        self.artwork_retry.insert((game_id.clone(),kind), std::time::Instant::now() + std::time::Duration::from_secs(30));
+                    }
                     let selected = match &self.state {
                         AppState::TitleList { selected } => *selected,
                         _ => continue,
@@ -263,6 +269,8 @@ impl App {
     }
 
     pub(super) fn invalidate_catalog_for_locale_change(&mut self) {
+        self.artwork_retry.clear();
+        self.artwork_focus = None;
         if let Err(error) = clear_catalog_cache() {
             eprintln!("Title cache: failed to clear after locale change: {error:#}");
         }

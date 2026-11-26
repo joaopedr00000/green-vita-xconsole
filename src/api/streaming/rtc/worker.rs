@@ -331,8 +331,9 @@ async fn run_session<B: super::session::RtcSessionBackend>(
         }
         if !stale_released && active_gamepad_pulse.is_none() && last_input_sample.elapsed() >= Duration::from_millis(100) {
             send_sampled_gamepad_frame(&mut session, SampledGamepadFrame { frame: GamepadFrame::default(), sampled_at: Instant::now() }, &mut last_gamepad_sent, true);
-            stale_released = true;
-            crate::diagnostics::step("controller", "STALE_NEUTRAL");
+            // Retry neutral if the channel was not writable, without spamming the log.
+            stale_released = last_gamepad_sent.as_ref().is_some_and(|(frame, _)| *frame == GamepadFrame::default());
+            if stale_released { crate::diagnostics::step("controller", "STALE_NEUTRAL"); }
         }
 
         let local_candidates = match session.pump().await {
@@ -345,16 +346,24 @@ async fn run_session<B: super::session::RtcSessionBackend>(
             }
             Err(error) => {
                 consecutive_pump_errors = consecutive_pump_errors.saturating_add(1);
-                session.status =
-                    format!("WebRTC pump error; retrying ({consecutive_pump_errors}): {error:#}");
-                eprintln!("{}", session.status);
+                crate::diagnostics::failure("rtc_pump", &format!("{error:#}"));
+                if consecutive_pump_errors >= 12 {
+                    crate::diagnostics::step("rtc_pump", "RETRY_LIMIT_REACHED");
+                    let _ = session.close();
+                    send_important_event(&events_tx, RtcWorkerEvent::Closed);
+                    return Ok(());
+                }
+                session.status = format!("WebRTC transport recovering ({consecutive_pump_errors}/12)");
                 send_lossy(
                     &events_tx,
                     RtcWorkerEvent::Status {
                         status: session.status.clone(),
                     },
                 );
-                tokio::time::sleep(PUMP_ERROR_SLEEP).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(crate::streaming::policy::retry_delay_ms(consecutive_pump_errors))) => {},
+                    _ = wait_stop(&stopping) => {},
+                }
                 continue;
             }
         };

@@ -59,7 +59,7 @@ pub async fn run(mut app: App) -> Result<()> {
     let mut last_network_check = Instant::now();
     let mut network_was_connected = false;
     let mut backgrounded = false;
-    let mut audio_session_active = false;
+    let mut audio_session_output: Option<std::sync::Arc<crate::streaming::video::DirectVideoOutput>> = None;
 
     loop {
         let loop_started_at = Instant::now();
@@ -237,9 +237,13 @@ pub async fn run(mut app: App) -> Result<()> {
         );
 
         app.tick().await?;
-        let active = app.state.streaming().is_some();
-        if audio_session_active && !active { audio_renderer.clear_session(); }
-        audio_session_active = active;
+        let output = app.state.streaming().map(|s| s.direct_video_output());
+        let same = match (&audio_session_output, &output) {
+            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a,b),
+            (None,None) => true, _ => false,
+        };
+        if !same { audio_renderer.clear_session(); }
+        audio_session_output = output;
         let native_config = match &app.state {
             AppState::Streaming(s) if !s.paused && app.settings.native_input_worker => s.native_config(&app.settings),
             _ => None,
@@ -309,7 +313,9 @@ pub async fn run(mut app: App) -> Result<()> {
         if Instant::now() < frame_deadline {
             while Instant::now() < frame_deadline {
                 let remaining = frame_deadline.saturating_duration_since(Instant::now());
-                sleep(remaining.min(STREAM_INPUT_POLL_INTERVAL)).await;
+                // Menus do not need four-millisecond input refreshes.
+                let live = matches!(&app.state, AppState::Streaming(s) if !s.paused);
+                sleep(if live { remaining.min(STREAM_INPUT_POLL_INTERVAL) } else { remaining }).await;
                 if Instant::now() >= frame_deadline {
                     break;
                 }

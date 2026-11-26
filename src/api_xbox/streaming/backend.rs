@@ -97,12 +97,14 @@ impl XboxStreamingBackend {
         format!("xCloud session {}", self.stream.session_id)
     }
 
-    pub(crate) async fn stop(self) -> Result<()> {
+    pub(crate) async fn stop(mut self) -> Result<()> {
+        if let Some(job) = self.ice_post_job.take() { job.abort(); }
+        if let Some(job) = self.ice_poll_job.take() { job.abort(); }
+        if let Some(job) = self.keepalive_job.take() { job.abort(); }
         self.worker.request_stop();
         self.worker.wait_stopped().await;
-        let session_id = self.stream.session_id.clone();
-        let response = self.stream.stop().await?;
-        eprintln!("Stopped xCloud session {session_id}: {response}");
+        self.stream.stop().await?;
+        crate::diagnostics::step("session_lifecycle", "STOPPED");
         Ok(())
     }
 

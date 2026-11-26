@@ -327,7 +327,7 @@ impl MsalAuth {
                 .await
                 .context("failed to read device code poll response")?;
             let error: DeviceCodeErrorResponse = serde_json::from_str(&body)
-                .with_context(|| format!("device code poll rejected with {status}: {body}"))?;
+                .with_context(|| format!("device code poll rejected with {status}"))?;
 
             return match error.error.as_str() {
                 "authorization_pending" => Ok(DeviceCodePoll::Pending(auth.poll_interval)),
@@ -335,10 +335,7 @@ impl MsalAuth {
                     auth.poll_interval + Duration::from_secs(5),
                 )),
                 "expired_token" | "bad_verification_code" => Ok(DeviceCodePoll::Restart),
-                _ => bail!(
-                    "device code poll rejected: {}",
-                    error.error_description.unwrap_or(error.error)
-                ),
+                _ => bail!("device code poll rejected with {status}"),
             };
         }
 
@@ -379,16 +376,10 @@ impl MsalAuth {
                 .is_some_and(|error| error.error == "invalid_grant")
             {
                 self.clear_saved_login();
-                let description = oauth_error
-                    .map(DeviceCodeErrorResponse::description)
-                    .unwrap_or(body);
-                bail!("saved xCloud login expired; please sign in again: {description}");
+                bail!("saved xCloud login expired; please sign in again (invalid_grant)");
             }
 
-            let details = oauth_error
-                .map(DeviceCodeErrorResponse::description)
-                .unwrap_or(body);
-            bail!("token refresh rejected with {status}: {details}");
+            bail!("token refresh rejected with {status}");
         }
 
         let token: UserTokenResponse = response
@@ -444,11 +435,7 @@ impl MsalAuth {
             .with_context(|| format!("{context_label} request failed"))?;
         let status = response.status();
         if !status.is_success() {
-            let body = response
-                .text()
-                .await
-                .with_context(|| format!("failed to read {context_label} error response"))?;
-            bail!("{context_label} rejected with {status}: {body}");
+            bail!("{context_label} rejected with {status}");
         }
 
         response

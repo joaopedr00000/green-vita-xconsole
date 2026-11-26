@@ -11,7 +11,7 @@ const MAX_PENDING_CATALOG_JOBS: usize = 4;
 const MAX_PENDING_PREFETCH_JOBS: usize = 4;
 const MAX_PENDING_CATALOG_RESULTS: usize = 8;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ImageKind {
     Cover,
     Background,
@@ -291,16 +291,20 @@ async fn load_or_fetch_image(
         }
     }
 
-    let bytes = client
+    const MAX_ART_BYTES: usize = 4 * 1024 * 1024;
+    let mut response = client
         .get(url)
         .send()
         .await
         .context("catalog image request failed")?
         .error_for_status()
-        .context("catalog image request returned an error status")?
-        .bytes()
-        .await
-        .context("failed to read catalog image response body")?;
+        .context("catalog image request returned an error status")?;
+    if response.content_length().is_some_and(|n| n > MAX_ART_BYTES as u64) { anyhow::bail!("catalog artwork exceeds download budget"); }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.context("failed to read catalog artwork")? {
+        if bytes.len().saturating_add(chunk.len()) > MAX_ART_BYTES { anyhow::bail!("catalog artwork exceeds download budget"); }
+        bytes.extend_from_slice(&chunk);
+    }
     let (max_width, max_height, pad_to_bounds) = kind.dimensions();
     let art = decode_image_rgba(&bytes, max_width, max_height, pad_to_bounds)?;
     if let Some(path) = cache_path.as_deref()
@@ -317,7 +321,14 @@ fn decode_image_rgba(
     max_height: u32,
     pad_to_bounds: bool,
 ) -> Result<(Vec<u8>, u32, u32)> {
-    let image = image::load_from_memory(bytes).context("failed to decode catalog image")?;
+    if bytes.len() > 4 * 1024 * 1024 { anyhow::bail!("catalog artwork exceeds input budget"); }
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(2048);
+    limits.max_image_height = Some(2048);
+    limits.max_alloc = Some(24 * 1024 * 1024);
+    reader.limits(limits);
+    let image = reader.decode().context("failed to decode bounded catalog image")?;
     let rgba = image.to_rgba8();
     let (width, height) = rgba.dimensions();
     let scale = (max_width as f32 / width as f32)

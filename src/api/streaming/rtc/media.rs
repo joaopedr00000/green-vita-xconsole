@@ -131,7 +131,8 @@ impl VideoReceiver {
             self.reorder_saved = 0;
             self.reorder_last_adjust = now;
         }
-        self.rtp.set_reorder_grace_ms(self.reorder_ms);
+        let jitter_floor = crate::streaming::policy::jitter_floor(floor, ceiling, if self.profile == StreamProfile::LowLatency { self.jitter_us / 2 } else { self.jitter_us });
+        self.rtp.set_reorder_grace_ms(self.reorder_ms.max(jitter_floor));
         self.bitrate.packet_received();
         let sample_stats = self.rtp.receive(&self.decoder, packet, keyframe_requested);
         self.reorder_saved = self.reorder_saved.saturating_add(sample_stats.recovered_after_wait);
@@ -351,7 +352,7 @@ impl VideoReceiver {
             self.stats.recovered_or_late_packets,
             self.stats.nack_requests,
             self.stats.nack_packets,
-            self.reorder_ms,
+            self.reorder_ms.max(crate::streaming::policy::jitter_floor(reorder_bounds(self.profile).0, reorder_bounds(self.profile).1, if self.profile == StreamProfile::LowLatency { self.jitter_us / 2 } else { self.jitter_us })),
             u8::from(self.rtp.waiting_for_keyframe()),
             self.stats.dropped,
             self.stats.decode_errors,
