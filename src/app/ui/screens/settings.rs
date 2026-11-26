@@ -301,8 +301,8 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
 
                 ui.separator();
                 let pt = app.settings.locale.as_str().starts_with("pt");
-                let pages=if pt {["Resumo","Rede avançada","Vídeo e áudio","Controles","Visão técnica"]}else{["Summary","Advanced network","Video and audio","Input","Technical overview"]};
-                if focus_row(ui,selected_index==row_index,format!("{}: {} >",if pt{"Painel de diagnóstico"}else{"Diagnostic panel"},pages[app.settings.hud_page.min(4) as usize])){commands.push(Command::CycleHudPage.into());}
+                let pages=if pt {["Resumo","Rede avançada","Vídeo e áudio","Controles","Visão técnica","Benchmark 60 s"]}else{["Summary","Advanced network","Video and audio","Input","Technical overview","60s benchmark"]};
+                if focus_row(ui,selected_index==row_index,format!("{}: {} >",if pt{"Painel de diagnóstico"}else{"Diagnostic panel"},pages[app.settings.hud_page.min(5) as usize])){commands.push(Command::CycleHudPage.into());}
                 row_index+=1;
                 if focus_row(ui,selected_index==row_index,format!("{}: {}% >",if pt{"Opacidade do painel"}else{"Panel opacity"},app.settings.hud_opacity.clamp(40,100))){commands.push(Command::CycleHudOpacity.into());}
                 row_index+=1;
@@ -625,7 +625,7 @@ impl App {
                 self.settings.native_deadzone_percent = 0;
                 self.settings.save();
             }
-            Command::CycleHudPage=>{self.settings.hud_page=(self.settings.hud_page.min(4)+1)%5;self.settings.save();}
+            Command::CycleHudPage=>{self.settings.hud_page=(self.settings.hud_page.min(5)+1)%6;self.settings.save();}
             Command::CycleLatencyMode=>{self.settings.latency_mode=(self.settings.latency_mode.min(2)+1)%3;crate::settings::set_latency_mode(self.settings.latency_mode);self.settings.save();}
             Command::CycleHudOpacity=>{self.settings.hud_opacity=match self.settings.hud_opacity{40=>60,60=>85,85=>100,_=>40};self.settings.save();}
             Command::SetShowStreamDebugInfo(enabled) => {

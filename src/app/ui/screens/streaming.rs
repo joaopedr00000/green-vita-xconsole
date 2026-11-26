@@ -182,6 +182,24 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                     row(ui,tr("Sincronização","Pacing"),modes[app.settings.latency_mode.min(2) as usize],white);
                     row(ui,tr("Controle","Input"),match crate::native_input::last_source(){1=>"Gamepad RAW",2=>"SDL2",_=>"—"},white);
                 },
+                5=>{
+                    section(ui,tr("BENCHMARK 60 S","60S BENCHMARK"));
+                    let b=crate::streaming::benchmark::status();
+                    let state=match b.phase{1=>format!("{} {}/10 s",tr("Aquecimento","Warmup"),b.seconds),2=>format!("{}/60 s",b.seconds),3=>tr("Concluído","Complete").to_owned(),_=>tr("Aguardando","Waiting").to_owned()};
+                    row(ui,tr("Estado","Status"),state,white);
+                    row(ui,tr("Amostras","Samples"),b.pipeline.count.to_string(),white);
+                    if b.phase==3 && b.pipeline.count>0{
+                        row(ui,tr("Mín / média","Min / mean"),format!("{:.2} / {:.2} ms",b.pipeline.min as f64/1000.0,b.pipeline.avg as f64/1000.0),white);
+                        row(ui,tr("Mediana / P95","Median / P95"),format!("{:.2} / {:.2} ms",b.pipeline.median as f64/1000.0,b.pipeline.p95 as f64/1000.0),white);
+                        row(ui,tr("P99 / máx","P99 / max"),format!("{:.2} / {:.2} ms",b.pipeline.p99 as f64/1000.0,b.pipeline.max as f64/1000.0),white);
+                        row(ui,tr("Intervalo P95 / P99","Interval P95 / P99"),format!("{:.2} / {:.2} ms",b.gap.p95 as f64/1000.0,b.gap.p99 as f64/1000.0),white);
+                        row(ui,tr("Espera quadro P95 / P99","Frame wait P95 / P99"),format!("{:.2} / {:.2} ms",b.claim.p95 as f64/1000.0,b.claim.p99 as f64/1000.0),white);
+                        row(ui,tr("Quadros/s (60 s)","Frames/s (60s)"),format!("{:.2}",b.pipeline.count as f64/60.0),white);
+                        row(ui,tr("Apresentações diretas","Direct presentations"),b.direct_wakes.to_string(),white);
+                        row(ui,tr("Amostras fora do limite","Samples beyond cap"),b.pipeline.omitted.to_string(),white);
+                    }
+                    note(ui,tr("Reinicia após pausa ou nova sessão.","Restarts after pause or new session."),muted);
+                },
                 _=>{}
             }
             if matches!(app.settings.hud_page,2|3){note(ui,tr("¹ Contadores acumulados (catch-up: sessão)","¹ Cumulative counters (catch-up: session)"),muted);}

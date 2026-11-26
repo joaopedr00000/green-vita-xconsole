@@ -97,6 +97,18 @@ impl DirectVideoOutput {
         }
     }
 
+    /// Nonblocking claim for the frame-ready render shortcut. Ownership is
+    /// identical to the normal path; an in-flight decode is never interrupted.
+    pub(crate) fn try_claim_latest(&self)->Option<DecodedFrame>{
+        let mut state=self.state.try_lock().ok()?;
+        state.targets.as_ref()?;
+        let frame=state.pending.take()?;
+        state.displayed=Some(frame.texture_index);
+        drop(state);
+        self.frame_displayed.notify_one();
+        Some(frame)
+    }
+
     /// Renderer claims the newest complete picture and reserves that texture
     /// under the same lock used by AVCDEC. No RTC or application mailbox hop.
     pub(crate) fn claim_latest(&self) -> Option<DecodedFrame> {

@@ -173,6 +173,7 @@ pub async fn run(mut app: App) -> Result<()> {
         }
         if backgrounded {
             overlay_cache=None;
+            surface.reset_benchmark();
             crate::native_input::disable();
             sleep(Duration::from_millis(50)).await;
             continue;
@@ -249,7 +250,7 @@ pub async fn run(mut app: App) -> Result<()> {
             (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a,b),
             (None,None) => true, _ => false,
         };
-        if !same { audio_renderer.clear_session(); overlay_cache=None; last_present=Instant::now(); }
+        if !same { audio_renderer.clear_session(); overlay_cache=None; last_present=Instant::now(); surface.reset_benchmark(); }
         audio_session_output = output;
         let native_config = match &app.state {
             AppState::Streaming(s) if !s.paused => s.native_config(&app.settings),
@@ -311,6 +312,8 @@ pub async fn run(mut app: App) -> Result<()> {
         full_output.textures_delta
         };
         let mode=crate::settings::latency_mode();
+        let bench_active=matches!(&app.state,AppState::Streaming(s) if !s.paused);
+        surface.benchmark_tick(bench_active,mode,app.settings.stream_profile as u8);
         let source_fps=app.state.streaming().and_then(|s|s.hud.as_ref()).filter(|h|h.at.elapsed()<Duration::from_secs(3)).and_then(|h|h.source_fps);
         let live_pacing=mode!=0 && cacheable && matches!(&app.state,AppState::Streaming(s) if !s.paused);
         let gap=crate::streaming::policy::early_wake_gap_us(mode,source_fps).map(Duration::from_micros);
@@ -356,6 +359,9 @@ pub async fn run(mut app: App) -> Result<()> {
                 );
             }
         }
+        // Only reuse a prepared overlay whose texture delta has already been
+        // consumed. At most one direct presentation before servicing the app.
+        let direct_wake=mode==2 && live_pacing && reuse;
         let frame_deadline = loop_started_at + TARGET_FRAME_TIME;
         if Instant::now() < frame_deadline {
             while Instant::now() < frame_deadline {
@@ -366,7 +372,7 @@ pub async fn run(mut app: App) -> Result<()> {
                 let mut early=false;
                 if live && live_pacing {
                     if let (Some(gap),Some(output))=(gap,audio_session_output.as_ref()){
-                        let until_gap=gap.saturating_sub(last_present.elapsed());
+                        let until_gap=if direct_wake{Duration::ZERO}else{gap.saturating_sub(last_present.elapsed())};
                         if until_gap.is_zero(){
                             early=output.wait_ready(slice).await;
                         }else{
@@ -376,6 +382,15 @@ pub async fn run(mut app: App) -> Result<()> {
                 }else{sleep(slice).await;}
                 if early{
                     crate::streaming::video::metrics::FRAME_WAKES.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+                    if direct_wake && surface.try_sync_ready_video_frame()?{
+                        // Decoder owns the other texture. No application tick,
+                        // SDL event processing or UI rebuild before this draw.
+                        surface.draw_scene(true)?;
+                        surface.paint_egui(&egui::TexturesDelta::default())?;
+                        last_present=Instant::now();
+                        crate::streaming::benchmark::DIRECT_WAKES.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+                    }
+                    // Always service the full application after a single wake.
                     break;
                 }
                 if Instant::now() >= frame_deadline {

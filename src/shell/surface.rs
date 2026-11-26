@@ -22,6 +22,7 @@ pub struct VitaSurface {
     pending_display_timestamps: Option<(Instant, Instant, Instant, crate::streaming::hud::DecodeStages)>, 
     egui_painter: SdlEguiPainter,
     last_video_present:Option<Instant>,
+    benchmark:crate::streaming::benchmark::Benchmark,
 }
 
 impl VitaSurface {
@@ -52,6 +53,7 @@ impl VitaSurface {
             pending_display_timestamps: None,
             egui_painter: SdlEguiPainter::default(),
             last_video_present:None,
+            benchmark:crate::streaming::benchmark::Benchmark::default(),
         })
     }
 
@@ -69,12 +71,25 @@ impl VitaSurface {
         self.ensure_direct_video_output(streaming)?;
 
         let Some(frame)=self.direct_video_output.as_ref().and_then(|output|output.claim_latest()) else{return Ok(false);};
+        self.accept_video_frame(frame)
+    }
+
+    pub fn try_sync_ready_video_frame(&mut self)->Result<bool>{
+        let Some(frame)=self.direct_video_output.as_ref().and_then(|o|o.try_claim_latest()) else{return Ok(false);};
+        self.accept_video_frame(frame)
+    }
+    fn accept_video_frame(&mut self,frame:crate::streaming::video::DecodedFrame)->Result<bool>{
         let index=frame.texture_index;
         if index>=2{anyhow::bail!("decoder returned invalid direct texture index {index}");}
         self.displayed_video_texture=Some(index);
         self.pending_display_timestamps=Some((frame.decoded_at,frame.enqueued_at,Instant::now(),frame.stages));
         Ok(true)
     }
+
+    pub fn benchmark_tick(&mut self,active:bool,mode:u8,profile:u8){
+        if let Some(report)=self.benchmark.tick(Instant::now(),active,mode,profile){crate::diagnostics::benchmark_result(&report);}
+    }
+    pub fn reset_benchmark(&mut self){self.benchmark.reset();}
 
     fn ensure_direct_video_output(&mut self, streaming: &StreamingSession) -> Result<()> {
         let output = streaming.direct_video_output();
@@ -144,6 +159,7 @@ impl VitaSurface {
         self.video_height = 0;
         self.pending_display_timestamps = None;
         self.last_video_present=None;
+        self.benchmark.reset();
     }
 
     pub fn draw_scene(&mut self, show_video: bool) -> Result<()> {
@@ -178,6 +194,7 @@ impl VitaSurface {
         if let Some((decoded_at, enqueued_at,claimed_at,stages)) = self.pending_display_timestamps.take() {
             let now = Instant::now();
             let gap_us=self.last_video_present.replace(now).map(|at|now.saturating_duration_since(at).as_micros() as u64).unwrap_or(0);
+            self.benchmark.observe(now,now.saturating_duration_since(enqueued_at).as_micros() as u64,gap_us,claimed_at.saturating_duration_since(decoded_at).as_micros() as u64);
             crate::streaming::video::metrics::METRICS.presented.fetch_add(1,Ordering::Relaxed);
             crate::streaming::video::metrics::presented(crate::streaming::hud::PresentedStages{decode:stages,present_gap_us:gap_us,display_us:now.saturating_duration_since(decoded_at).as_micros() as u64,pre_present_us:before_present.saturating_duration_since(decoded_at).as_micros() as u64,claim_us:claimed_at.saturating_duration_since(decoded_at).as_micros() as u64,draw_us:before_present.saturating_duration_since(claimed_at).as_micros() as u64,present_call_us:now.saturating_duration_since(before_present).as_micros() as u64,total_us:now.saturating_duration_since(enqueued_at).as_micros() as u64});
             crate::streaming::video::metrics::METRICS.display_queue_us.store(
