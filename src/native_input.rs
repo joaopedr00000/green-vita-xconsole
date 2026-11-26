@@ -49,6 +49,9 @@ pub fn configure(config:Option<Config>) {
     if config.is_some() { let _=STARTED.get_or_init(||std::thread::Builder::new().name("green-vita-input".into()).spawn(run).is_ok()); }
 }
 pub fn disable(){configure(None);}
+/// Only suppress the redundant post-render SDL read while RAW is fresh;
+/// the ordinary SDL polling path and View/Back handling remain intact.
+pub(crate) fn fresh_for_redundant_read()->bool{!suppressed() && STATE.try_lock().ok().is_some_and(|s|s.sample.as_ref().is_some_and(|f|f.sampled_at.elapsed()<Duration::from_millis(8)))}
 pub fn latest()->Option<NativeSample>{
     if suppressed(){return None;}
     let mut s=STATE.try_lock().ok()?;

@@ -10,7 +10,7 @@ pub(crate) struct PlaybackMetrics {
 }
 #[derive(Clone,Debug)]
 pub(crate) struct StreamHud {
-    pub at:Instant,pub elapsed:f64,pub server:Option<(u32,u32)>,pub encoded:Option<(u32,u32)>,
+    pub at:Instant,pub elapsed:f64,pub session_secs:u64,pub server:Option<(u32,u32)>,pub encoded:Option<(u32,u32)>,
     pub source_fps:Option<f64>,pub playback:PlaybackMetrics,pub rx_bps:u64,pub tx_bps:u64,
     pub rtt:Option<RttReading>,
     pub rx_total:u64,pub tx_total:u64,pub rx_packets:u64,pub tx_packets:u64,pub socket_errors:u64,

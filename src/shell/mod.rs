@@ -351,13 +351,15 @@ pub async fn run(mut app: App) -> Result<()> {
             && matches!(&app.state, AppState::Streaming(streaming) if !streaming.paused)
         {
             event_pump.pump_events();
-            send_stream_gamepad_state(
-                &mut app,
-                controller.as_ref(),
-                raw_joystick.as_ref(),
-                &rear_touch_buttons,
-                false,
-            );
+            if mode!=2 || !crate::native_input::fresh_for_redundant_read(){
+                send_stream_gamepad_state(
+                    &mut app,
+                    controller.as_ref(),
+                    raw_joystick.as_ref(),
+                    &rear_touch_buttons,
+                    false,
+                );
+            }
         }
         let frame_deadline = loop_started_at + TARGET_FRAME_TIME;
         if Instant::now() < frame_deadline {

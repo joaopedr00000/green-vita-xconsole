@@ -41,6 +41,7 @@ pub(crate) struct VideoReceiver {
     next_frame_id: u64,
     pub(crate) received_packet: bool,
     last_stats_report: Instant,
+    session_started_at:Instant,
     stats: VideoStats,
     bitrate: AdaptiveBitrate,
     last_decoder_error_logged: Option<Instant>,
@@ -72,6 +73,7 @@ impl VideoReceiver {
             next_frame_id: 0,
             received_packet: false,
             last_stats_report: Instant::now(),
+            session_started_at:Instant::now(),
             stats: VideoStats::default(),
             bitrate: AdaptiveBitrate::new(),
             last_decoder_error_logged: None,
@@ -241,7 +243,7 @@ impl VideoReceiver {
     /// but this at least asks for missing packets rather than merely advertising
     /// NACK in the SDP. The peer type remains unchanged (Vita RTC compatibility).
     fn expire_missing(&mut self,now:Instant){let before=self.missing_video_packets.len();self.missing_video_packets.retain(|(_,at,_)|now.saturating_duration_since(*at)<=NACK_EXPIRY);self.expired_missing=self.expired_missing.saturating_add((before-self.missing_video_packets.len()) as u64);}
-    fn nack_grace_ms(&self)->u64{crate::streaming::policy::nack_grace_ms(crate::settings::latency_mode(),self.late_age_us,self.unrequested_samples)}
+    fn nack_grace_ms(&self)->u64{if self.profile==StreamProfile::LowLatency || self.rtp.waiting_for_keyframe(){12}else{crate::streaming::policy::nack_grace_ms(crate::settings::latency_mode(),self.late_age_us,self.unrequested_samples)}}
     pub(crate) fn request_nack(&mut self, peer: &mut RTCPeerConnection, now: Instant) {
         self.expire_missing(now);
         if self.missing_video_packets.is_empty(){return;}
@@ -346,7 +348,7 @@ impl VideoReceiver {
             .encoded_resolution
             .map(|(width, height)| format!("{width}x{height}"))
             .unwrap_or_else(|| "?".to_owned());
-        let hud=crate::streaming::hud::StreamHud {at:now,elapsed,server:None,encoded:self.stats.encoded_resolution,source_fps:self.cadence.estimate(),playback,rtt:None,rx_bps:0,tx_bps:0,rx_total:0,tx_total:0,rx_packets:0,tx_packets:0,socket_errors:0,video_bps:(rx_mbps*1_000_000.0) as u64,requested_bps:(self.bitrate.current_mbps()*1_000_000.0) as u64,jitter_us:self.jitter_us,gaps:self.stats.detected_sequence_gaps,late:self.stats.recovered_or_late_packets,nacks:self.stats.nack_requests,nack_packets:self.stats.nack_packets,unrequested_late:self.unrequested_late,expired_missing:self.expired_missing,untracked_missing:self.untracked_missing,nack_grace_ms:self.nack_grace_ms(),waiting:self.rtp.waiting_for_keyframe(),dropped:self.stats.dropped,errors:self.stats.decode_errors};
+        let hud=crate::streaming::hud::StreamHud {at:now,elapsed,session_secs:now.saturating_duration_since(self.session_started_at).as_secs(),server:None,encoded:self.stats.encoded_resolution,source_fps:self.cadence.estimate(),playback,rtt:None,rx_bps:0,tx_bps:0,rx_total:0,tx_total:0,rx_packets:0,tx_packets:0,socket_errors:0,video_bps:(rx_mbps*1_000_000.0) as u64,requested_bps:(self.bitrate.current_mbps()*1_000_000.0) as u64,jitter_us:self.jitter_us,gaps:self.stats.detected_sequence_gaps,late:self.stats.recovered_or_late_packets,nacks:self.stats.nack_requests,nack_packets:self.stats.nack_packets,unrequested_late:self.unrequested_late,expired_missing:self.expired_missing,untracked_missing:self.untracked_missing,nack_grace_ms:self.nack_grace_ms(),waiting:self.rtp.waiting_for_keyframe(),dropped:self.stats.dropped,errors:self.stats.decode_errors};
         Some((format!(
             "enc:{encoded_resolution} srcfps:{source_fps} {performance} rx:{rx_mbps:.1}Mbps remb:{:.1}Mbps jitter:{}ms gaps:{} late:{} nack:{}/{} wait:{} drop:{} err:{}",
             self.bitrate.current_mbps(),
