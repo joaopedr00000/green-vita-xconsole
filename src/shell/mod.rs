@@ -75,8 +75,8 @@ pub async fn run(mut app: App) -> Result<()> {
 
         for event in event_pump.poll_iter() {
             match &event {
-                Event::AppWillEnterBackground | Event::AppDidEnterBackground => { backgrounded = true; interrupted = true; },
-                Event::AppWillEnterForeground | Event::AppDidEnterForeground => { backgrounded = false; interrupted = true; },
+                Event::AppWillEnterBackground { .. } | Event::AppDidEnterBackground { .. } => { backgrounded = true; interrupted = true; },
+                Event::AppWillEnterForeground { .. } | Event::AppDidEnterForeground { .. } => { backgrounded = false; interrupted = true; },
                 _ => {}
             }
             rear_touch_buttons.handle_event(&event);
