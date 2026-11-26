@@ -115,7 +115,7 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
             row(ui,"Download",speed(h.rx_bps),white);row(ui,"Upload",speed(h.tx_bps),white);
             row(ui,"Jitter",millis(h.jitter_us),health(h.jitter_us,10000,25000));
             row(ui,"RTT (ICE)",h.rtt.map(|r|format!("{}{}",millis(r.current_us),if r.age().as_secs()>30{" *"}else{""})).unwrap_or_else(||"—".to_owned()),h.rtt.filter(|r|r.age().as_secs()<=30).map(|r|health(r.current_us,50000,90000)).unwrap_or(muted));
-            match app.settings.hud_page.min(4){
+            match app.settings.hud_page.min(5){
                 1=>{
                     section(ui,tr("REDE AVANÇADA","ADVANCED NETWORK"));
                     row(ui,tr("Vídeo recebido","Video payload"),speed(h.video_bps),white);

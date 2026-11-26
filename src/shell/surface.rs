@@ -23,6 +23,7 @@ pub struct VitaSurface {
     egui_painter: SdlEguiPainter,
     last_video_present:Option<Instant>,
     benchmark:crate::streaming::benchmark::Benchmark,
+    direct_frame:bool,
 }
 
 impl VitaSurface {
@@ -54,6 +55,7 @@ impl VitaSurface {
             egui_painter: SdlEguiPainter::default(),
             last_video_present:None,
             benchmark:crate::streaming::benchmark::Benchmark::default(),
+            direct_frame:false,
         })
     }
 
@@ -71,11 +73,13 @@ impl VitaSurface {
         self.ensure_direct_video_output(streaming)?;
 
         let Some(frame)=self.direct_video_output.as_ref().and_then(|output|output.claim_latest()) else{return Ok(false);};
+        self.direct_frame=false;
         self.accept_video_frame(frame)
     }
 
     pub fn try_sync_ready_video_frame(&mut self)->Result<bool>{
         let Some(frame)=self.direct_video_output.as_ref().and_then(|o|o.try_claim_latest()) else{return Ok(false);};
+        self.direct_frame=true;
         self.accept_video_frame(frame)
     }
     fn accept_video_frame(&mut self,frame:crate::streaming::video::DecodedFrame)->Result<bool>{
@@ -160,6 +164,7 @@ impl VitaSurface {
         self.pending_display_timestamps = None;
         self.last_video_present=None;
         self.benchmark.reset();
+        self.direct_frame=false;
     }
 
     pub fn draw_scene(&mut self, show_video: bool) -> Result<()> {
@@ -194,7 +199,8 @@ impl VitaSurface {
         if let Some((decoded_at, enqueued_at,claimed_at,stages)) = self.pending_display_timestamps.take() {
             let now = Instant::now();
             let gap_us=self.last_video_present.replace(now).map(|at|now.saturating_duration_since(at).as_micros() as u64).unwrap_or(0);
-            self.benchmark.observe(now,now.saturating_duration_since(enqueued_at).as_micros() as u64,gap_us,claimed_at.saturating_duration_since(decoded_at).as_micros() as u64);
+            self.benchmark.observe(now,now.saturating_duration_since(enqueued_at).as_micros() as u64,gap_us,claimed_at.saturating_duration_since(decoded_at).as_micros() as u64,self.direct_frame);
+            self.direct_frame=false;
             crate::streaming::video::metrics::METRICS.presented.fetch_add(1,Ordering::Relaxed);
             crate::streaming::video::metrics::presented(crate::streaming::hud::PresentedStages{decode:stages,present_gap_us:gap_us,display_us:now.saturating_duration_since(decoded_at).as_micros() as u64,pre_present_us:before_present.saturating_duration_since(decoded_at).as_micros() as u64,claim_us:claimed_at.saturating_duration_since(decoded_at).as_micros() as u64,draw_us:before_present.saturating_duration_since(claimed_at).as_micros() as u64,present_call_us:now.saturating_duration_since(before_present).as_micros() as u64,total_us:now.saturating_duration_since(enqueued_at).as_micros() as u64});
             crate::streaming::video::metrics::METRICS.display_queue_us.store(

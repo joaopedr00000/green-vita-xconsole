@@ -388,7 +388,6 @@ pub async fn run(mut app: App) -> Result<()> {
                         surface.draw_scene(true)?;
                         surface.paint_egui(&egui::TexturesDelta::default())?;
                         last_present=Instant::now();
-                        crate::streaming::benchmark::DIRECT_WAKES.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
                     }
                     // Always service the full application after a single wake.
                     break;

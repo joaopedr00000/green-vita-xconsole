@@ -1,10 +1,9 @@
 //! Bounded render-thread benchmark; no per-frame I/O, sort or lock.
-use std::sync::{Mutex,atomic::{AtomicU64,Ordering}};
+use std::sync::Mutex;
 use std::time::Instant;
 const WARMUP:u64=10;
 const WINDOW:u64=60;
 const CAP:usize=8192;
-pub(crate) static DIRECT_WAKES:AtomicU64=AtomicU64::new(0);
 #[derive(Clone,Copy,Debug,Default)]
 pub(crate) struct Distribution{pub count:u64,pub min:u64,pub avg:u64,pub median:u64,pub p95:u64,pub p99:u64,pub max:u64,pub omitted:u64}
 #[derive(Default)]
@@ -25,7 +24,7 @@ static STATUS:Mutex<Report>=Mutex::new(Report{phase:0,seconds:0,mode:0,profile:0
 pub(crate) fn status()->Report{STATUS.lock().map(|s|*s).unwrap_or_default()}
 fn publish(r:Report){if let Ok(mut s)=STATUS.lock(){*s=r;}}
 #[derive(Default)]
-pub(crate) struct Benchmark{key:Option<(u8,u8)>,start:Option<Instant>,pipeline:Samples,gap:Samples,claim:Samples,last_status_sec:Option<u64>,done:bool,wake_start:Option<u64>}
+pub(crate) struct Benchmark{key:Option<(u8,u8)>,start:Option<Instant>,pipeline:Samples,gap:Samples,claim:Samples,last_status_sec:Option<u64>,done:bool,direct_wakes:u64}
 impl Benchmark{
     pub(crate) fn reset(&mut self){
         if self.key.is_some(){*self=Self::default();publish(Report::default());}
@@ -43,7 +42,7 @@ impl Benchmark{
         let elapsed=now.saturating_duration_since(start).as_secs();
         if elapsed>=WARMUP+WINDOW{
             self.done=true;
-            let report=Report{phase:3,seconds:WINDOW,mode,profile,pipeline:self.pipeline.finish(),gap:self.gap.finish(),claim:self.claim.finish(),direct_wakes:DIRECT_WAKES.load(Ordering::Relaxed).saturating_sub(self.wake_start.unwrap_or_else(||DIRECT_WAKES.load(Ordering::Relaxed)))};
+            let report=Report{phase:3,seconds:WINDOW,mode,profile,pipeline:self.pipeline.finish(),gap:self.gap.finish(),claim:self.claim.finish(),direct_wakes:self.direct_wakes};
             publish(report);return Some(report);
         }
         if self.last_status_sec!=Some(elapsed){
@@ -52,12 +51,12 @@ impl Benchmark{
         }
         None
     }
-    pub(crate) fn observe(&mut self,now:Instant,total:u64,gap:u64,claim:u64){
+    pub(crate) fn observe(&mut self,now:Instant,total:u64,gap:u64,claim:u64,direct:bool){
         if self.key.is_none()||self.done{return;}
         let start=*self.start.get_or_insert(now);
         let sec=now.saturating_duration_since(start).as_secs();
         if !(WARMUP..WARMUP+WINDOW).contains(&sec){return;}
-        self.wake_start.get_or_insert_with(||DIRECT_WAKES.load(Ordering::Relaxed));
+        if direct{self.direct_wakes+=1;}
         self.pipeline.add(total);
         if self.pipeline.count>1 && gap>0{self.gap.add(gap);}
         self.claim.add(claim);
@@ -72,13 +71,13 @@ mod tests{
     }
     #[test]fn warmup_window_and_restart(){
         let t=Instant::now();let mut b=Benchmark::default();
-        assert!(b.tick(t,true,2,2).is_none());b.observe(t,999,0,999);
-        b.observe(t+Duration::from_secs(9),999,1,999);
-        b.observe(t+Duration::from_secs(10),4,16,1);
-        b.observe(t+Duration::from_secs(69),6,17,2);
-        b.observe(t+Duration::from_secs(70),999,1,999);
+        assert!(b.tick(t,true,2,2).is_none());b.observe(t,999,0,999,true);
+        b.observe(t+Duration::from_secs(9),999,1,999,true);
+        b.observe(t+Duration::from_secs(10),4,16,1,true);
+        b.observe(t+Duration::from_secs(69),6,17,2,false);
+        b.observe(t+Duration::from_secs(70),999,1,999,true);
         let r=b.tick(t+Duration::from_secs(70),true,2,2).unwrap();
-        assert_eq!((r.pipeline.count,r.pipeline.avg,r.gap.count,r.claim.p99),(2,5,1,2));
+        assert_eq!((r.pipeline.count,r.pipeline.avg,r.gap.count,r.claim.p99,r.direct_wakes),(2,5,1,2,1));
         assert!(b.tick(t+Duration::from_secs(71),true,2,2).is_none());
         b.tick(t+Duration::from_secs(72),false,2,2);assert!(b.start.is_none());
     }
