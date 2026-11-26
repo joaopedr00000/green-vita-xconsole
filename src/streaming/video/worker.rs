@@ -38,6 +38,7 @@ impl VideoDecodeWorker {
     pub fn spawn(config: DecoderConfig, direct_output: Arc<DirectVideoOutput>) -> Result<Self> {
         let decoder =
             HwVideoDecoder::new(config).context("failed to create hardware H264 decoder")?;
+        metrics::clear_stages();
         direct_output.decoder_ready.store(true, Ordering::Release);
         let (access_units, worker_access_units) = bounded(MAX_PENDING_ACCESS_UNITS);
         let (commands, worker_commands) = unbounded();
@@ -163,6 +164,7 @@ fn run_decode_loop(
             },
             recv(access_units) -> access_unit => {
                 let Ok(access_unit) = access_unit else { break };
+                metrics::QUEUE_DEPTH.store(access_units.len() as u64,Ordering::Relaxed);
                 decode_queued_access_unit(
                     &mut decoder,
                     config,
@@ -190,6 +192,7 @@ fn decode_queued_access_unit(
         return;
     }
 
+    let dequeued_at=Instant::now();
     if decoder.is_none() {
         match HwVideoDecoder::new(config) {
             Ok(new_decoder) => *decoder = Some(new_decoder),
@@ -204,6 +207,7 @@ fn decode_queued_access_unit(
         }
     }
 
+    let texture_started_at=Instant::now();
     let Some(direct_target) = direct_output.lock_decode_target() else {
         // Do not decode until the renderer has registered its two GXM textures. There is no
         // legacy output buffer to copy from anymore.
@@ -218,8 +222,10 @@ fn decode_queued_access_unit(
             .expect("decoder recreated above")
             .decode(&access_unit.data, direct_target.target)
     }));
+    let decode_finished_at=Instant::now();
+    let stages=crate::streaming::hud::DecodeStages {queue_us:dequeued_at.saturating_duration_since(access_unit.queued_at).as_micros() as u64,texture_us:decode_started_at.saturating_duration_since(texture_started_at).as_micros() as u64,decode_us:decode_finished_at.saturating_duration_since(decode_started_at).as_micros() as u64};
     metrics::METRICS.decode_us.store(
-        decode_started_at.elapsed().as_micros() as u64,
+        stages.decode_us,
         Ordering::Relaxed,
     );
     if access_unit.generation != generation.load(Ordering::Acquire) {
@@ -240,8 +246,9 @@ fn decode_queued_access_unit(
                 Ok(DecodedFrame {
                     texture_index,
                     generation,
-                    decoded_at: Instant::now(),
+                    decoded_at: decode_finished_at,
                     enqueued_at: access_unit.queued_at,
+                    stages,
                 }),
             );
         }

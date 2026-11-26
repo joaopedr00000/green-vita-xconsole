@@ -58,6 +58,7 @@ pub(crate) struct RtcSession<B: RtcSessionBackend> {
     pub status: String,
     pub(crate) hud:Option<crate::streaming::hud::StreamHud>,
     last_network_counters:(u64,u64),
+    rtt_pair:String,rtt:Option<crate::streaming::hud::RttReading>,last_rtt_poll:Option<Instant>,
 }
 
 impl<B: RtcSessionBackend> RtcSession<B> {
@@ -82,7 +83,7 @@ impl<B: RtcSessionBackend> RtcSession<B> {
             initial_video_watchdog_started_at: None,
             last_initial_video_keyframe_request: None,
             status: "Negotiating WebRTC connection".to_owned(),
-            hud:None,last_network_counters:(0,0),
+            hud:None,last_network_counters:(0,0),rtt_pair:String::new(),rtt:None,last_rtt_poll:None,
         })
     }
 
@@ -146,6 +147,8 @@ impl<B: RtcSessionBackend> RtcSession<B> {
             self.last_network_counters=(rx,tx);
             hud.rx_total=rx;hud.tx_total=tx;hud.rx_packets=rp;hud.tx_packets=tp;hud.socket_errors=errors;
             hud.server=self.backend.server_video_size();
+            self.sample_rtt(now);hud.rtt=self.rtt;
+            crate::diagnostics::hud_metrics(&hud);
             self.hud=Some(hud);
             self.status = if let Some((width, height)) = self.backend.server_video_size() {
                 format!("srv:{width}x{height} {status}")
@@ -158,6 +161,25 @@ impl<B: RtcSessionBackend> RtcSession<B> {
         Ok(gathered_candidates)
     }
 
+    fn sample_rtt(&mut self,now:Instant){
+        use rtc::statistics::{StatsSelector,report::RTCStatsReportEntry};
+        if self.connection_state!=RTCPeerConnectionState::Connected{self.rtt=None;self.rtt_pair.clear();return;}
+        if self.last_rtt_poll.is_some_and(|at|now.saturating_duration_since(at)<Duration::from_secs(2)){return;}
+        self.last_rtt_poll=Some(now);
+        let report=self.peer.get_stats(now,StatsSelector::None);
+        let selected=report.transport().map(|t|t.selected_candidate_pair_id.as_str()).unwrap_or("");
+        let pair=if selected.is_empty(){
+            let mut nominated=report.candidate_pairs().filter(|p|p.nominated);
+            let first=nominated.next();if nominated.next().is_none(){first}else{None}
+        }else{match report.get(selected){Some(RTCStatsReportEntry::IceCandidatePair(p))=>Some(p),_=>None}};
+        let Some(pair)=pair else{self.rtt=None;self.rtt_pair.clear();return;};
+        if self.rtt_pair!=pair.stats.id{self.rtt_pair=pair.stats.id.clone();self.rtt=None;}
+        if let Some((current_us,average_us))=crate::streaming::hud::rtt_values(pair.current_round_trip_time,pair.total_round_trip_time,pair.responses_received){
+            if self.rtt.is_none_or(|r|r.responses!=pair.responses_received){
+                self.rtt=Some(crate::streaming::hud::RttReading{current_us,average_us,responses:pair.responses_received,observed_at:now});
+            }
+        }else{self.rtt=None;}
+    }
     fn initial_video_keyframe_due(&mut self, now: Instant) -> bool {
         if self.video.received_packet {
             self.initial_video_watchdog_started_at = None;

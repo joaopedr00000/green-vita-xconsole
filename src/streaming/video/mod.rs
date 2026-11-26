@@ -78,18 +78,11 @@ impl DirectVideoOutput {
         self.frame_displayed.notify_all();
     }
 
-    pub(crate) fn mark_displayed(&self, index: usize, generation: u64) {
-        let mut cleared_pending = false;
-        if let Ok(mut state) = self.state.lock() {
-            state.displayed = Some(index);
-            if state.pending == Some((index, generation)) {
-                state.pending = None;
-                cleared_pending = true;
-            }
-        }
-        if cleared_pending {
-            self.frame_displayed.notify_one();
-        }
+    pub(crate) fn mark_displayed(&self, index: usize, generation: u64) -> bool {
+        let Ok(mut state)=self.state.lock() else{return false;};
+        if state.pending!=Some((index,generation)){return false;}
+        state.displayed=Some(index);state.pending=None;drop(state);
+        self.frame_displayed.notify_one();true
     }
 
     pub(super) fn lock_decode_target(&self) -> Option<DirectVideoTargetGuard<'_>> {
@@ -137,6 +130,7 @@ pub struct DecodedFrame {
     /// GPU frame age is measured on the Vita at presentation, not guessed from RTT.
     pub decoded_at: std::time::Instant,
     pub enqueued_at: std::time::Instant,
+    pub(crate) stages:crate::streaming::hud::DecodeStages,
 }
 
 #[derive(Clone, Copy)]

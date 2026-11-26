@@ -163,3 +163,11 @@ mod tests {
         assert_eq!(error_code("HTTP 403 forbidden"), "HTTP_403");
     }
 }
+
+static LAST_HUD:std::sync::Mutex<Option<Instant>>=std::sync::Mutex::new(None);
+pub(crate) fn hud_metrics(h:&crate::streaming::hud::StreamHud){
+    let Ok(mut last)=LAST_HUD.try_lock() else{return;};if last.is_some_and(|at|at.elapsed()<Duration::from_secs(5)){return;}*last=Some(Instant::now());drop(last);
+    let m=&h.playback;
+    if let Some(s)=m.stages{write_record("video_stages",&format!("queue_us={} texture_us={} decode_us={} display_us={} total_us={} mean_us={} max_us={} samples={} depth={} stale_handoffs={}",s.decode.queue_us,s.decode.texture_us,s.decode.decode_us,s.display_us,s.total_us,m.pipeline_avg_us,m.pipeline_max_us,m.stage_samples,m.queue_depth,m.stale_handoffs));}
+    if let Some(r)=h.rtt{write_record("ice_rtt",&format!("current_us={} average_us={} responses={} observed_age_ms={}",r.current_us,r.average_us,r.responses,r.age().as_millis()));}
+}

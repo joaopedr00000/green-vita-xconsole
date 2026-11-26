@@ -252,7 +252,7 @@ pub async fn run(mut app: App) -> Result<()> {
         if let Some(streaming) = app.state.streaming_mut() {
             audio_renderer.submit_packets(streaming.take_audio_packets());
         }
-        surface.sync_video_frame(app.state.streaming())?;
+        surface.prepare_video_output(app.state.streaming())?;
 
         let raw_input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -284,6 +284,9 @@ pub async fn run(mut app: App) -> Result<()> {
         }
         if !matches!(&app.state, AppState::Streaming(s) if !s.paused) { crate::native_input::disable(); }
 
+        // Select the newest already-decoded picture immediately before rendering.
+        if let Some(streaming)=app.state.streaming_mut(){streaming.refresh_video_frame();}
+        surface.sync_video_frame(app.state.streaming())?;
         surface.draw_scene(matches!(&app.state, AppState::Streaming(_)))?;
         let clipped_primitives =
             egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);

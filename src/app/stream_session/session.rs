@@ -186,15 +186,7 @@ impl StreamingSession {
         self.backend.send_pointer_event(event);
     }
 
-    pub(super) fn drain_backend_events(&mut self) -> (bool, Option<String>) {
-        let mut events = Vec::new();
-        while let Some(event) = self.backend.try_recv_event() {
-            events.push(event);
-        }
-        while let Some(mut packets) = self.backend.try_recv_audio_packets() {
-            self.pending_audio_packets.append(&mut packets);
-        }
-
+    pub(crate) fn refresh_video_frame(&mut self){
         if let Some((frame_id, frame)) = self.backend.take_latest_frame() {
             if self.latest_video_frame.is_none() {
                 crate::diagnostics::step("webrtc_video", if self.is_console_attempt {
@@ -206,6 +198,19 @@ impl StreamingSession {
             self.latest_video_frame = Some(frame_id);
             self.current_video_frame = Some(frame);
         }
+
+    }
+
+    pub(super) fn drain_backend_events(&mut self) -> (bool, Option<String>) {
+        let mut events = Vec::new();
+        while let Some(event) = self.backend.try_recv_event() {
+            events.push(event);
+        }
+        while let Some(mut packets) = self.backend.try_recv_audio_packets() {
+            self.pending_audio_packets.append(&mut packets);
+        }
+
+        self.refresh_video_frame();
 
         let mut closed = false;
         let mut error = None;

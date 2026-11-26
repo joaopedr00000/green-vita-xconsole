@@ -93,6 +93,7 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
             row(ui,tr("Uso de rede (UDP)","Network (UDP)"),speed(h.rx_bps.saturating_add(h.tx_bps)),white);
             row(ui,"Download",speed(h.rx_bps),white);row(ui,"Upload",speed(h.tx_bps),white);
             row(ui,"Jitter",millis(h.jitter_us),health(h.jitter_us,10000,25000));
+            row(ui,"RTT (ICE)",h.rtt.map(|r|format!("{}{}",millis(r.current_us),if r.age().as_secs()>30{" *"}else{""})).unwrap_or_else(||"—".to_owned()),h.rtt.filter(|r|r.age().as_secs()<=30).map(|r|health(r.current_us,50000,90000)).unwrap_or(muted));
             match app.settings.hud_page.min(4){
                 1=>{
                     section(ui,tr("REDE AVANÇADA","ADVANCED NETWORK"));
@@ -103,15 +104,21 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                     row(ui,tr("Lacunas / atrasados","Gaps / late"),format!("{} / {}",h.gaps,h.late),white);
                     row(ui,tr("NACK pedidos / pacotes","NACK requests / packets"),format!("{} / {}",h.nacks,h.nack_packets),white);
                     row(ui,tr("Erros de socket","Socket errors"),h.socket_errors.to_string(),white);
-                    row(ui,tr("RTT da sessão","Session RTT"),tr("Não medido","Not measured"),muted);
+                    row(ui,tr("RTT médio ICE","Mean ICE RTT"),h.rtt.map(|r|millis(r.average_us)).unwrap_or_else(||"—".to_owned()),white);
+                    row(ui,tr("Respostas / idade obs.","Replies / observed age"),h.rtt.map(|r|format!("{} / {} s",r.responses,r.age().as_secs())).unwrap_or_else(||"—".to_owned()),white);
                 },
                 2=>{
                     section(ui,tr("VÍDEO E ÁUDIO","VIDEO & AUDIO"));
                     row(ui,tr("FPS decodificados","Decoded FPS"),format!("{:.1}",crate::streaming::hud::fps(m.decoded,h.elapsed)),white);
                     row(ui,tr("Montagem RTP méd / máx","RTP assembly avg / max"),format!("{:.1} / {:.1} ms",m.rtp_avg_us as f64/1000.0,m.rtp_max_us as f64/1000.0),white);
-                    row(ui,tr("Decodificação","Decode"),millis(m.decode_us),white);
-                    row(ui,tr("Idade da fila de vídeo","Video queue age"),millis(m.queue_age_us),white);
-                    row(ui,tr("Espera de exibição","Display wait"),millis(m.display_us),white);
+                    if let Some(s)=m.stages {
+                        row(ui,tr("Fila comprimida","Compressed queue"),millis(s.decode.queue_us),white);
+                        row(ui,tr("Espera textura","Texture wait"),millis(s.decode.texture_us),white);
+                        row(ui,tr("Decodificação H.264","H.264 decode"),millis(s.decode.decode_us),white);
+                        row(ui,tr("Espera exibição","Display wait"),millis(s.display_us),white);
+                        row(ui,tr("Pipeline méd / máx","Pipeline avg / max"),if m.stage_samples>0{format!("{:.1} / {:.1} ms",m.pipeline_avg_us as f64/1000.0,m.pipeline_max_us as f64/1000.0)}else{"—".to_owned()},white);
+                    }
+                    row(ui,tr("Fila / obsoletos","Queue / stale"),format!("{} / {}",m.queue_depth,m.stale_handoffs),white);
                     row(ui,tr("Descartes / erros","Drops / errors"),format!("{} / {}",h.dropped,h.errors),white);
                     row(ui,tr("Resync / reset¹","Resync / reset¹"),format!("{} / {}",m.resyncs,m.resets),white);
                     row(ui,tr("Buffer de áudio","Audio target"),format!("{} ms",m.audio_ms),white);
@@ -143,7 +150,7 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                 _=>{}
             }
             if matches!(app.settings.hud_page,2|3){ui.label(egui::RichText::new(tr("¹ Desde a abertura do app","¹ Since app launch")).size(9.5).color(muted));}
-            ui.label(egui::RichText::new(tr("Tempos locais; RTT não medido.","Local times; RTT not measured.")).size(9.5).color(muted));
+            ui.label(egui::RichText::new(tr("RTT ICE ≠ input total; * amostra antiga.","ICE RTT ≠ total input; * old sample.")).size(9.5).color(muted));
         });
     });
 }

@@ -54,6 +54,7 @@ pub(crate) struct VideoReceiver {
     profile: StreamProfile,
     last_status_damage: (u64, u64),
     clean_status_seconds: u32,
+    cadence:crate::streaming::hud::SourceCadence,
 }
 
 impl VideoReceiver {
@@ -83,6 +84,7 @@ impl VideoReceiver {
             profile: active_stream_profile(),
             last_status_damage: (0, 0),
             clean_status_seconds: 0,
+            cadence:Default::default(),
         })
     }
 
@@ -100,6 +102,7 @@ impl VideoReceiver {
         self.last_nack_report = None;
         self.last_rtp_arrival = None;
         self.jitter_us = 0;
+        self.cadence=Default::default();
     }
 
     pub(crate) fn handles(&self, track_id: &MediaStreamTrackId) -> bool {
@@ -130,8 +133,8 @@ impl VideoReceiver {
             .dropped
             .saturating_add(sample_stats.dropped as u64);
         self.bitrate.frame_damaged(sample_stats.dropped as u64);
-        if sample_stats.source_frame_duration_us.is_some() {
-            self.stats.last_sample_duration_us = sample_stats.source_frame_duration_us;
+        if let Some(duration)=sample_stats.source_frame_duration_us {
+            self.stats.last_sample_duration_us=Some(duration);self.cadence.observe(duration);
         }
         if sample_stats.encoded_resolution.is_some() {
             self.stats.encoded_resolution = sample_stats.encoded_resolution;
@@ -335,7 +338,7 @@ impl VideoReceiver {
             .encoded_resolution
             .map(|(width, height)| format!("{width}x{height}"))
             .unwrap_or_else(|| "?".to_owned());
-        let hud=crate::streaming::hud::StreamHud {at:now,elapsed,server:None,encoded:self.stats.encoded_resolution,source_fps:self.stats.last_sample_duration_us.filter(|v|*v>0).map(|v|1_000_000.0/v as f64),playback,rx_bps:0,tx_bps:0,rx_total:0,tx_total:0,rx_packets:0,tx_packets:0,socket_errors:0,video_bps:(rx_mbps*1_000_000.0) as u64,requested_bps:(self.bitrate.current_mbps()*1_000_000.0) as u64,jitter_us:self.jitter_us,gaps:self.stats.detected_sequence_gaps,late:self.stats.recovered_or_late_packets,nacks:self.stats.nack_requests,nack_packets:self.stats.nack_packets,waiting:self.rtp.waiting_for_keyframe(),dropped:self.stats.dropped,errors:self.stats.decode_errors};
+        let hud=crate::streaming::hud::StreamHud {at:now,elapsed,server:None,encoded:self.stats.encoded_resolution,source_fps:self.cadence.estimate(),playback,rtt:None,rx_bps:0,tx_bps:0,rx_total:0,tx_total:0,rx_packets:0,tx_packets:0,socket_errors:0,video_bps:(rx_mbps*1_000_000.0) as u64,requested_bps:(self.bitrate.current_mbps()*1_000_000.0) as u64,jitter_us:self.jitter_us,gaps:self.stats.detected_sequence_gaps,late:self.stats.recovered_or_late_packets,nacks:self.stats.nack_requests,nack_packets:self.stats.nack_packets,waiting:self.rtp.waiting_for_keyframe(),dropped:self.stats.dropped,errors:self.stats.decode_errors};
         Some((format!(
             "enc:{encoded_resolution} srcfps:{source_fps} {performance} rx:{rx_mbps:.1}Mbps remb:{:.1}Mbps jitter:{}ms gaps:{} late:{} nack:{}/{} wait:{} drop:{} err:{}",
             self.bitrate.current_mbps(),

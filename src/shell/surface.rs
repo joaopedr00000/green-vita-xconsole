@@ -20,7 +20,7 @@ pub struct VitaSurface {
     video_width: u32,
     video_height: u32,
     last_frame_id: u64,
-    pending_display_timestamps: Option<(Instant, Instant)>, 
+    pending_display_timestamps: Option<(Instant, Instant, crate::streaming::hud::DecodeStages)>, 
     egui_painter: SdlEguiPainter,
 }
 
@@ -60,6 +60,7 @@ impl VitaSurface {
         Self::fit_rect(self.video_width, self.video_height, WIDTH, HEIGHT)
     }
 
+    pub fn prepare_video_output(&mut self,streaming:Option<&StreamingSession>)->Result<()> {if let Some(s)=streaming{self.ensure_direct_video_output(s)}else{self.detach_direct_video_output();Ok(())}}
     pub fn sync_video_frame(&mut self, streaming: Option<&StreamingSession>) -> Result<()> {
         let Some(streaming) = streaming else {
             self.detach_direct_video_output();
@@ -78,13 +79,10 @@ impl VitaSurface {
             anyhow::bail!("decoder returned invalid direct texture index {index}");
         }
         if let Some(output) = &self.direct_video_output {
-            output.mark_displayed(index, frame.generation);
-        }
+            if !output.mark_displayed(index, frame.generation){crate::streaming::video::metrics::STALE_HANDOFFS.fetch_add(1,Ordering::Relaxed);self.last_frame_id=frame_id;return Ok(());}
+        }else{return Ok(());}
         self.displayed_video_texture = Some(index);
-        self.pending_display_timestamps = Some((frame.decoded_at, frame.enqueued_at));
-        crate::streaming::video::metrics::METRICS
-            .presented
-            .fetch_add(1, Ordering::Relaxed);
+        self.pending_display_timestamps = Some((frame.decoded_at, frame.enqueued_at,frame.stages));
         self.last_frame_id = frame_id;
         Ok(())
     }
@@ -195,8 +193,10 @@ impl VitaSurface {
             textures_delta,
         )?;
         self.canvas.present();
-        if let Some((decoded_at, enqueued_at)) = self.pending_display_timestamps.take() {
+        if let Some((decoded_at, enqueued_at,stages)) = self.pending_display_timestamps.take() {
             let now = Instant::now();
+            crate::streaming::video::metrics::METRICS.presented.fetch_add(1,Ordering::Relaxed);
+            crate::streaming::video::metrics::presented(crate::streaming::hud::PresentedStages{decode:stages,display_us:now.saturating_duration_since(decoded_at).as_micros() as u64,total_us:now.saturating_duration_since(enqueued_at).as_micros() as u64});
             crate::streaming::video::metrics::METRICS.display_queue_us.store(
                 now.saturating_duration_since(decoded_at).as_micros() as u64,
                 Ordering::Relaxed,
