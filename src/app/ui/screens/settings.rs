@@ -21,7 +21,6 @@ pub enum Command {
     CycleHudOpacity,
     SetStreamProfile(StreamProfile),
     SetCloudRegion(Option<String>),
-    SetNativeInput(bool),
     CycleNativeDeadzone,
     CycleControl(usize),
     ResetControls,
@@ -39,7 +38,6 @@ enum SettingsRow {
     HudOpacity,
     StreamingProfile(StreamProfile),
     CloudRegion,
-    NativeInput,
     NativeDeadzone,
     Control(usize),
     ResetControls,
@@ -92,7 +90,6 @@ fn settings_rows(app: &App) -> Vec<SettingsRow> {
     ));
     rows.push(SettingsRow::HudPage);
     rows.push(SettingsRow::HudOpacity);
-    rows.push(SettingsRow::NativeInput);
     rows.push(SettingsRow::NativeDeadzone);
     rows.extend((0..16).map(SettingsRow::Control));
     rows.push(SettingsRow::ResetControls);
@@ -309,10 +306,7 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
                 ui.small(if pt{"Recuperação adaptativa da fila de vídeo: automática."}else{"Adaptive video queue recovery: automatic."});
                 ui.separator();
                 ui.heading(if pt { "Mapeamento dos controles" } else { "Controller mapping" });
-                if checkbox_row(ui, selected_index == row_index, app.settings.native_input_worker, (if pt { "Leitura nativa independente (experimental)" } else { "Independent native input (experimental)" }).to_owned()) {
-                    commands.push(Command::SetNativeInput(!app.settings.native_input_worker).into());
-                }
-                row_index += 1;
+                ui.small(if pt{"Gamepad RAW: automático no Vita; SDL2 para compatibilidade."}else{"RAW gamepad: automatic on Vita; SDL2 compatibility fallback."});
                 if focus_row(ui, selected_index == row_index, format!("{}: {}% >", if pt { "Zona morta (nativa)" } else { "Native stick deadzone" },app.settings.native_deadzone_percent)) {
                     commands.push(Command::CycleNativeDeadzone.into());
                 }
@@ -520,7 +514,6 @@ impl App {
             }
             SettingsRow::HudPage=>return self.handle_settings_command(Command::CycleHudPage),
             SettingsRow::HudOpacity=>return self.handle_settings_command(Command::CycleHudOpacity),
-            SettingsRow::NativeInput => return self.handle_settings_command(Command::SetNativeInput(!self.settings.native_input_worker)),
             SettingsRow::NativeDeadzone => return self.handle_settings_command(Command::CycleNativeDeadzone),
             SettingsRow::Control(index) => return self.handle_settings_command(Command::CycleControl(*index)),
             SettingsRow::ResetControls => return self.handle_settings_command(Command::ResetControls),
@@ -609,10 +602,6 @@ impl App {
             Command::SetStreamProfile(profile) => {
                 self.settings.stream_profile = profile;
                 crate::settings::set_active_stream_profile(profile);
-                self.settings.save();
-            }
-            Command::SetNativeInput(enabled) => {
-                self.settings.native_input_worker = enabled;
                 self.settings.save();
             }
             Command::CycleNativeDeadzone => {

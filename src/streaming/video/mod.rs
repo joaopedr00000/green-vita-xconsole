@@ -14,7 +14,7 @@ pub use worker::VideoDecodeWorker;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::{Condvar, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration,Instant};
 
 // Let a short render hitch absorb at most two 30 fps intervals. Together with the
 // frame already pending for presentation, this caps the microbuffer at three frames.
@@ -30,7 +30,7 @@ pub(crate) struct VideoTextureTarget {
 struct DirectVideoOutputState {
     targets: Option<[VideoTextureTarget; 2]>,
     displayed: Option<usize>,
-    pending: Option<(usize, u64)>,
+    pending: Option<DecodedFrame>,
     next_generation: u64,
 }
 
@@ -78,11 +78,16 @@ impl DirectVideoOutput {
         self.frame_displayed.notify_all();
     }
 
-    pub(crate) fn mark_displayed(&self, index: usize, generation: u64) -> bool {
-        let Ok(mut state)=self.state.lock() else{return false;};
-        if state.pending!=Some((index,generation)){return false;}
-        state.displayed=Some(index);state.pending=None;drop(state);
-        self.frame_displayed.notify_one();true
+    /// Renderer claims the newest complete picture and reserves that texture
+    /// under the same lock used by AVCDEC. No RTC or application mailbox hop.
+    pub(crate) fn claim_latest(&self) -> Option<DecodedFrame> {
+        let mut state=self.state.lock().ok()?;
+        state.targets.as_ref()?;
+        let frame=state.pending.take()?;
+        state.displayed=Some(frame.texture_index);
+        drop(state);
+        self.frame_displayed.notify_one();
+        Some(frame)
     }
 
     pub(super) fn lock_decode_target(&self,wait_ms:u64) -> Option<DirectVideoTargetGuard<'_>> {
@@ -99,15 +104,16 @@ impl DirectVideoOutput {
         let targets = state.targets?;
         let index = state
             .pending
-            .map(|(index, _)| index)
+            .map(|frame| frame.texture_index)
             .unwrap_or_else(|| state.displayed.map_or(0, |displayed| 1 - displayed));
         // Reuse only the unpublished-to-screen target. Invalidate the older
         // generation before writing so a no-output/error cannot expose stale pixels.
         // The pending texture is never the displayed one. Clear its generation
         // even on the ordinary timeout before writing into it. This protects
         // against a no-output/error return on both recovery and normal paths.
-        if state.pending.take().is_some() && wait_ms<67 {
-            metrics::CATCH_UP_REPLACEMENTS.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+        if state.pending.take().is_some() {
+            metrics::OUTPUT_REPLACEMENTS.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+            if wait_ms<67 {metrics::CATCH_UP_REPLACEMENTS.fetch_add(1,std::sync::atomic::Ordering::Relaxed);}
         }
         Some(DirectVideoTargetGuard {
             state,
@@ -124,14 +130,15 @@ pub(super) struct DirectVideoTargetGuard<'a> {
 }
 
 impl DirectVideoTargetGuard<'_> {
-    pub(super) fn publish(mut self) -> (usize, u64) {
+    pub(super) fn publish(mut self,decoded_at:Instant,enqueued_at:Instant,stages:crate::streaming::hud::DecodeStages) -> DecodedFrame {
         self.state.next_generation = self.state.next_generation.wrapping_add(1);
-        let generation = self.state.next_generation;
-        self.state.pending = Some((self.index, generation));
-        (self.index, generation)
+        let frame=DecodedFrame{texture_index:self.index,generation:self.state.next_generation,decoded_at,enqueued_at,stages};
+        self.state.pending=Some(frame);
+        frame
     }
 }
 
+#[derive(Clone,Copy)]
 pub struct DecodedFrame {
     pub texture_index: usize,
     pub generation: u64,

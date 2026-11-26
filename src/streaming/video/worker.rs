@@ -16,6 +16,7 @@ const MAX_PENDING_ACCESS_UNITS: usize = 6;
 struct QueuedAccessUnit {
     data: Vec<u8>,
     queued_at: Instant,
+    source_duration_us:Option<u64>,
     generation: u64,
 }
 
@@ -97,6 +98,7 @@ impl VideoDecodeWorker {
         let access_unit = QueuedAccessUnit {
             data,
             queued_at: Instant::now(),
+            source_duration_us:source_frame_duration_us,
             generation: self.generation.load(Ordering::Acquire),
         };
         match self.access_units.try_send(access_unit) {
@@ -210,7 +212,7 @@ fn decode_queued_access_unit(
     }
 
     let texture_started_at=Instant::now();
-    let wait_ms=crate::streaming::policy::catch_up_wait_ms(dequeued_at.saturating_duration_since(access_unit.queued_at).as_micros() as u64,remaining);
+    let wait_ms=crate::streaming::policy::catch_up_wait_ms(dequeued_at.saturating_duration_since(access_unit.queued_at).as_micros() as u64,remaining,access_unit.source_duration_us);
     let Some(direct_target) = direct_output.lock_decode_target(wait_ms) else {
         // Do not decode until the renderer has registered its two GXM textures. There is no
         // legacy output buffer to copy from anymore.
@@ -238,7 +240,7 @@ fn decode_queued_access_unit(
     match decode_result {
         Ok(Ok(true)) => {
             metrics::METRICS.decoded.fetch_add(1, Ordering::Relaxed);
-            let (texture_index, generation) = direct_target.publish();
+            let frame = direct_target.publish(decode_finished_at,access_unit.queued_at,stages);
             metrics::METRICS.pipeline_age_us.store(
                 access_unit.queued_at.elapsed().as_micros() as u64,
                 Ordering::Relaxed,
@@ -246,13 +248,7 @@ fn decode_queued_access_unit(
             publish_result(
                 latest_result,
                 result_ready,
-                Ok(DecodedFrame {
-                    texture_index,
-                    generation,
-                    decoded_at: decode_finished_at,
-                    enqueued_at: access_unit.queued_at,
-                    stages,
-                }),
+                Ok(frame),
             );
         }
         Ok(Ok(false)) => {}

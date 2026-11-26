@@ -133,11 +133,12 @@ pub async fn run(mut app: App) -> Result<()> {
             {
                 streaming.send_pointer_event(pointer_event);
             }
-            if let Event::ControllerDeviceAdded { .. } = event
-                && controller.is_none()
-            {
-                controller = open_first_controller(&game_controller_subsystem);
-                raw_joystick = joystick_subsystem.open(0).ok();
+            if let Event::ControllerDeviceAdded { .. } = event {
+                crate::native_input::disable();
+                if controller.is_none(){
+                    controller = open_first_controller(&game_controller_subsystem);
+                    raw_joystick = joystick_subsystem.open(0).ok();
+                }
             }
             if let Event::ControllerDeviceRemoved { which, .. } = event {
                 if controller.as_ref().is_some_and(|c| c.instance_id() == which) {
@@ -245,7 +246,7 @@ pub async fn run(mut app: App) -> Result<()> {
         if !same { audio_renderer.clear_session(); }
         audio_session_output = output;
         let native_config = match &app.state {
-            AppState::Streaming(s) if !s.paused && app.settings.native_input_worker => s.native_config(&app.settings),
+            AppState::Streaming(s) if !s.paused => s.native_config(&app.settings),
             _ => None,
         };
         crate::native_input::configure(native_config);
@@ -287,7 +288,7 @@ pub async fn run(mut app: App) -> Result<()> {
         // Finish CPU-side UI tessellation before selecting the newest texture.
         let clipped_primitives =
             egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
-        if let Some(streaming)=app.state.streaming_mut(){streaming.refresh_video_frame();}
+        // Claim the latest published texture directly; RTC still reports first-frame and errors.
         surface.sync_video_frame(app.state.streaming())?;
         surface.draw_scene(matches!(&app.state, AppState::Streaming(_)))?;
         surface.paint_egui(

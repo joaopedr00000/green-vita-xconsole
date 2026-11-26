@@ -8,25 +8,33 @@ mod tests {
     #[test] fn retry_is_bounded() { assert_eq!(retry_delay_ms(1),100); assert_eq!(retry_delay_ms(u32::MAX),800); }
 }
 
-/// Global presentation-only recovery. Preserve the hardware-validated fast
-/// path and introduce a gentler intermediate tier for a moderate backlog.
-/// Never skip compressed access units here; when there is no backlog, retain
-/// the original presentation wait to preserve smooth pacing.
-pub fn catch_up_wait_ms(age_us:u64,remaining:usize)->u64{
-    if remaining<2 {67}
-    else if age_us>=45_000 {2}
-    else if age_us>=30_000 {8}
-    else {67}
+/// Presentation-only recovery; never skips compressed references. The
+/// previous tiers remain for all rates. At >=50fps allow a moderate recovery
+/// with a single newer queued unit, provided the current AU is already late.
+pub fn catch_up_wait_ms(age_us:u64,remaining:usize,source_duration_us:Option<u64>)->u64{
+    if remaining>=2 {
+        if age_us>=45_000{return 2;}
+        if age_us>=30_000{return 8;}
+    }
+    let fast_stream=source_duration_us.is_some_and(|d|(8_000..=20_000).contains(&d));
+    if fast_stream && remaining>=1 && age_us>=25_000{return 8;}
+    67
 }
 #[cfg(test)]
 mod video_tests{
     use super::*;
-    #[test]fn catch_up_global_and_backlog_gated(){
-        assert_eq!(catch_up_wait_ms(100_000,1),67);
-        assert_eq!(catch_up_wait_ms(29_999,5),67);
-        assert_eq!(catch_up_wait_ms(30_000,2),8);
-        assert_eq!(catch_up_wait_ms(44_999,5),8);
-        assert_eq!(catch_up_wait_ms(45_000,2),2);
-        assert_eq!(catch_up_wait_ms(100_000,5),2);
+    #[test]fn recovery_preserves_normal_pacing_and_old_tiers(){
+        assert_eq!(catch_up_wait_ms(100_000,0,Some(16_667)),67);
+        assert_eq!(catch_up_wait_ms(100_000,1,Some(33_333)),67);
+        assert_eq!(catch_up_wait_ms(100_000,1,None),67);
+        assert_eq!(catch_up_wait_ms(29_999,5,Some(33_333)),67);
+        assert_eq!(catch_up_wait_ms(30_000,2,None),8);
+        assert_eq!(catch_up_wait_ms(45_000,2,Some(16_667)),2);
+    }
+    #[test]fn high_fps_single_newer_frame_recovers_moderately(){
+        assert_eq!(catch_up_wait_ms(24_999,1,Some(16_667)),67);
+        assert_eq!(catch_up_wait_ms(25_000,1,Some(16_667)),8);
+        assert_eq!(catch_up_wait_ms(25_000,1,Some(20_001)),67);
+        assert_eq!(catch_up_wait_ms(60_000,1,Some(0)),67);
     }
 }

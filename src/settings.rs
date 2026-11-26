@@ -153,7 +153,6 @@ pub struct Settings {
     pub preferred_cloud_region: Option<String>,
     pub game_profiles: HashMap<String, GameProfile>,
     pub control_map: [u8; 16],
-    pub native_input_worker: bool,
     pub native_deadzone_percent: u8,
 }
 
@@ -188,7 +187,6 @@ impl Default for Settings {
             preferred_cloud_region: None,
             game_profiles: HashMap::new(),
             control_map: crate::streaming::input::default_control_map(),
-            native_input_worker: false,
             native_deadzone_percent: 0,
         }
     }

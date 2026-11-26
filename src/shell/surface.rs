@@ -19,7 +19,6 @@ pub struct VitaSurface {
     direct_video_output: Option<Arc<DirectVideoOutput>>,
     video_width: u32,
     video_height: u32,
-    last_frame_id: u64,
     pending_display_timestamps: Option<(Instant, Instant, crate::streaming::hud::DecodeStages)>, 
     egui_painter: SdlEguiPainter,
 }
@@ -49,7 +48,6 @@ impl VitaSurface {
             direct_video_output: None,
             video_width: 0,
             video_height: 0,
-            last_frame_id: 0,
             pending_display_timestamps: None,
             egui_painter: SdlEguiPainter::default(),
         })
@@ -68,22 +66,11 @@ impl VitaSurface {
         };
         self.ensure_direct_video_output(streaming)?;
 
-        let Some((frame_id, frame)) = streaming.video_frame() else {
-            return Ok(());
-        };
-        if frame_id == self.last_frame_id {
-            return Ok(());
-        }
-        let index = frame.texture_index;
-        if index >= 2 {
-            anyhow::bail!("decoder returned invalid direct texture index {index}");
-        }
-        if let Some(output) = &self.direct_video_output {
-            if !output.mark_displayed(index, frame.generation){crate::streaming::video::metrics::STALE_HANDOFFS.fetch_add(1,Ordering::Relaxed);self.last_frame_id=frame_id;return Ok(());}
-        }else{return Ok(());}
-        self.displayed_video_texture = Some(index);
-        self.pending_display_timestamps = Some((frame.decoded_at, frame.enqueued_at,frame.stages));
-        self.last_frame_id = frame_id;
+        let Some(frame)=self.direct_video_output.as_ref().and_then(|output|output.claim_latest()) else{return Ok(());};
+        let index=frame.texture_index;
+        if index>=2{anyhow::bail!("decoder returned invalid direct texture index {index}");}
+        self.displayed_video_texture=Some(index);
+        self.pending_display_timestamps=Some((frame.decoded_at,frame.enqueued_at,frame.stages));
         Ok(())
     }
 
@@ -142,7 +129,6 @@ impl VitaSurface {
         self.direct_video_output = Some(output);
         self.video_width = width;
         self.video_height = height;
-        self.last_frame_id = 0;
         Ok(())
     }
 
@@ -154,7 +140,6 @@ impl VitaSurface {
         self.displayed_video_texture = None;
         self.video_width = 0;
         self.video_height = 0;
-        self.last_frame_id = 0;
         self.pending_display_timestamps = None;
     }
 
