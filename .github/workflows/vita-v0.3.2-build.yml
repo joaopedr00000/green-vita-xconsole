@@ -9,7 +9,13 @@ concurrency:
   group: green-vita-v032-candidate
   cancel-in-progress: true
 jobs:
+  input-policy-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustc --edition=2024 --test src/streaming/input.rs -o /tmp/green-vita-input-tests && /tmp/green-vita-input-tests
   build:
+    needs: input-policy-tests
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/vita-rust/vitasdk-rs:latest

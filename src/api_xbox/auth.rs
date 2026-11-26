@@ -665,6 +665,9 @@ fn load_saved_refresh_token() -> Result<Option<SavedRefreshToken>> {
         primary => match read_token_at(TOKEN_STORE_BACKUP) {
             Ok(Some(token)) => {
                 crate::diagnostics::step("token_vault", "BACKUP_RECOVERED");
+                // Restore a recovered credential using the verified current format.
+                let value = match &token { SavedRefreshToken::Encrypted(value, _) | SavedRefreshToken::Legacy(value) => value };
+                let _ = persist_refresh_token(value);
                 Ok(Some(token))
             }
             _ => primary,

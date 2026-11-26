@@ -11,6 +11,7 @@ use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 const PUMP_SLEEP: Duration = Duration::from_millis(1);
@@ -51,6 +52,8 @@ struct SampledGamepadFrame {
 
 pub struct RtcWorker {
     commands_tx: SyncSender<RtcWorkerCommand>,
+    stopping: Arc<AtomicBool>,
+    finished: Arc<AtomicBool>,
     pub(crate) events_rx: Receiver<RtcWorkerEvent>,
     pub(crate) audio_rx: Receiver<Vec<Bytes>>,
     pub(crate) latest_frame: Arc<Mutex<Option<(u64, DecodedFrame)>>>,
@@ -62,6 +65,10 @@ pub struct RtcWorker {
 impl RtcWorker {
     pub(crate) fn spawn<P: RtcWorkerProvider>(provider: P) -> Result<Self> {
         let (commands_tx, commands_rx) = sync_channel(MAX_PENDING_COMMANDS);
+        let stopping = Arc::new(AtomicBool::new(false));
+        let finished = Arc::new(AtomicBool::new(false));
+        let worker_stopping = Arc::clone(&stopping);
+        let worker_finished = Arc::clone(&finished);
         let (events_tx, events_rx) = sync_channel(MAX_PENDING_EVENTS);
         let (audio_tx, audio_rx) = sync_channel(MAX_PENDING_AUDIO_BATCHES);
         let latest_frame = Arc::new(Mutex::new(None));
@@ -87,27 +94,32 @@ impl RtcWorker {
                         worker_latest_gamepad,
                         worker_gamepad_pulses,
                         worker_direct_video_output,
+                        Arc::clone(&worker_stopping),
                     )
                 })) {
                     Ok(Ok(())) => {}
-                    Ok(Err(error)) => {
+                    Ok(Err(error)) if !worker_stopping.load(Ordering::Acquire) => {
                         send_important_event(
                             &events_tx,
                             RtcWorkerEvent::Error(format!("{error:#}")),
                         );
                     }
-                    Err(_) => {
+                    Err(_) if !worker_stopping.load(Ordering::Acquire) => {
                         send_important_event(
                             &events_tx,
                             RtcWorkerEvent::Error("RTC worker thread panicked".to_owned()),
                         );
                     }
+                    _ => {}
                 }
+                worker_finished.store(true, Ordering::Release);
             })
             .context("failed to spawn RTC worker thread")?;
 
         Ok(Self {
             commands_tx,
+            stopping,
+            finished,
             events_rx,
             audio_rx,
             latest_frame,
@@ -115,6 +127,21 @@ impl RtcWorker {
             gamepad_pulses,
             direct_video_output,
         })
+    }
+
+    pub(crate) fn request_stop(&self) {
+        self.stopping.store(true, Ordering::Release);
+        send_lossy(&self.commands_tx, RtcWorkerCommand::Stop);
+    }
+
+    pub(crate) async fn wait_stopped(&self) {
+        let deadline = Instant::now() + Duration::from_millis(750);
+        while !self.finished.load(Ordering::Acquire) && Instant::now() < deadline {
+            // Drain events so a terminal send cannot prevent worker completion.
+            while self.events_rx.try_recv().is_ok() {}
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        if !self.finished.load(Ordering::Acquire) { crate::diagnostics::step("rtc_worker", "STOP_PENDING"); }
     }
 
     pub fn add_remote_candidate(&self, candidate: RTCIceCandidateInit) {
@@ -143,7 +170,7 @@ impl RtcWorker {
 
 impl Drop for RtcWorker {
     fn drop(&mut self) {
-        send_lossy(&self.commands_tx, RtcWorkerCommand::Stop);
+        self.request_stop();
     }
 }
 
@@ -156,6 +183,7 @@ fn run_worker_thread<P: RtcWorkerProvider>(
     latest_gamepad: Arc<Mutex<Option<SampledGamepadFrame>>>,
     gamepad_pulses: Arc<Mutex<VecDeque<GamepadFrame>>>,
     direct_video_output: Arc<DirectVideoOutput>,
+    stopping: Arc<AtomicBool>,
 ) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -168,10 +196,10 @@ fn run_worker_thread<P: RtcWorkerProvider>(
         let mut session = RtcSession::new(peer, backend, config, direct_video_output).await?;
 
         let offer = session.create_offer()?;
-        let answer_sdp =
-            tokio::time::timeout(SDP_NEGOTIATION_TIMEOUT, provider.exchange_sdp(&offer))
-                .await
-                .context("timed out waiting for RTC SDP answer")??;
+        let answer_sdp = tokio::select! {
+            answer = tokio::time::timeout(SDP_NEGOTIATION_TIMEOUT, provider.exchange_sdp(&offer)) => answer.context("timed out waiting for RTC SDP answer")??,
+            _ = wait_stop(&stopping) => { let _ = session.close(); return Ok(()); }
+        };
         session.set_remote_answer(answer_sdp)?;
         #[cfg(target_os = "vita")]
         prioritize_rtc_thread();
@@ -191,6 +219,7 @@ fn run_worker_thread<P: RtcWorkerProvider>(
             latest_frame,
             latest_gamepad,
             gamepad_pulses,
+            stopping,
         )
         .await
     })
@@ -219,6 +248,10 @@ fn prioritize_rtc_thread() {
     }
 }
 
+async fn wait_stop(stopping: &AtomicBool) {
+    while !stopping.load(Ordering::Acquire) { tokio::time::sleep(Duration::from_millis(10)).await; }
+}
+
 async fn run_session<B: super::session::RtcSessionBackend>(
     mut session: RtcSession<B>,
     commands_rx: Receiver<RtcWorkerCommand>,
@@ -227,6 +260,7 @@ async fn run_session<B: super::session::RtcSessionBackend>(
     latest_frame: Arc<Mutex<Option<(u64, DecodedFrame)>>>,
     latest_gamepad: Arc<Mutex<Option<SampledGamepadFrame>>>,
     gamepad_pulses: Arc<Mutex<VecDeque<GamepadFrame>>>,
+    stopping: Arc<AtomicBool>,
 ) -> Result<()> {
     let mut last_status = session.status.clone();
     let mut last_connection_state = session.connection_state;
@@ -238,7 +272,7 @@ async fn run_session<B: super::session::RtcSessionBackend>(
     let mut stale_released = false;
 
     loop {
-        if !drain_commands(&mut session, &commands_rx) {
+        if stopping.load(Ordering::Acquire) || !drain_commands(&mut session, &commands_rx) {
             send_sampled_gamepad_frame(&mut session, SampledGamepadFrame { frame: GamepadFrame::default(), sampled_at: Instant::now() }, &mut last_gamepad_sent, true);
             let _ = session.close();
             return Ok(());
@@ -256,7 +290,7 @@ async fn run_session<B: super::session::RtcSessionBackend>(
             .lock()
             .ok()
             .and_then(|mut latest| latest.take());
-        if latest.as_ref().is_none_or(|s| s.frame.view == 0.0) {
+        if !stopping.load(Ordering::Acquire) && latest.as_ref().is_none_or(|s| s.frame.view == 0.0) {
             if let Some((frame, sampled_at)) = crate::native_input::latest() {
                 latest = Some(SampledGamepadFrame { frame, sampled_at });
             }
@@ -397,7 +431,7 @@ fn send_sampled_gamepad_frame<B: super::session::RtcSessionBackend>(
         // This is *local* input dispatch delay, not end-to-end xCloud latency.
         crate::streaming::video::metrics::METRICS
             .input_dispatch_us
-            .store(now.duration_since(sampled.sampled_at).as_micros() as u64,
+            .store(now.saturating_duration_since(sampled.sampled_at).as_micros() as u64,
                 std::sync::atomic::Ordering::Relaxed);
         *last_sent = Some((sampled.frame, now));
     }

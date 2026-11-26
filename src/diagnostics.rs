@@ -107,8 +107,8 @@ pub(crate) fn initialize() {
                     if records.len() == MAX_EVENTS { records.pop_front(); }
                     records.push_back(format!("  {} +{}ms {}", sequence, started.elapsed().as_millis(), record));
                 }
-                let mut output = format!("GreenVita {} | UTC epoch {} | redacted local diagnostics\\nDropped queue records: {}\\n", env!("CARGO_PKG_VERSION"), epoch, DROPPED.load(Ordering::Relaxed));
-                for line in &records { output.push_str(line); output.push('\\n'); }
+                let mut output = format!("GreenVita {} | UTC epoch {} | redacted local diagnostics\nDropped queue records: {}\n", env!("CARGO_PKG_VERSION"), epoch, DROPPED.load(Ordering::Relaxed));
+                for line in &records { output.push_str(line); output.push('\n'); }
                 let _ = crate::fs_utils::write_file_truncating(FILE, output.as_bytes());
                 std::thread::sleep(Duration::from_millis(100));
             }

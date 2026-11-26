@@ -98,6 +98,8 @@ impl XboxStreamingBackend {
     }
 
     pub(crate) async fn stop(self) -> Result<()> {
+        self.worker.request_stop();
+        self.worker.wait_stopped().await;
         let session_id = self.stream.session_id.clone();
         let response = self.stream.stop().await?;
         eprintln!("Stopped xCloud session {session_id}: {response}");
