@@ -10,8 +10,12 @@ pub(crate) static OUTPUT_REPLACEMENTS:AtomicU64=AtomicU64::new(0);
 pub(crate) static CATCH_UP_REPLACEMENTS:AtomicU64=AtomicU64::new(0);
 pub(crate) static FRAME_WAKES:AtomicU64=AtomicU64::new(0);
 pub(crate) static IDLE_SWAPS_SAVED:AtomicU64=AtomicU64::new(0);
-pub(crate) fn presented(stages:PresentedStages){if let Ok(mut s)=STAGES.try_lock(){s.last=Some(stages);s.sum=s.sum.saturating_add(stages.total_us);s.max=s.max.max(stages.total_us);s.count+=1;if s.totals.len()<256{s.totals.push(stages.total_us);}if stages.present_gap_us>0 && s.gaps.len()<256{s.gaps.push(stages.present_gap_us);}}}
-pub(crate) fn clear_stages(){if let Ok(mut s)=STAGES.lock(){*s=StageWindow::default();}QUEUE_DEPTH.store(0,Ordering::Relaxed);STALE_HANDOFFS.store(0,Ordering::Relaxed);OUTPUT_REPLACEMENTS.store(0,Ordering::Relaxed);CATCH_UP_REPLACEMENTS.store(0,Ordering::Relaxed);FRAME_WAKES.store(0,Ordering::Relaxed);IDLE_SWAPS_SAVED.store(0,Ordering::Relaxed);}
+pub(crate) static AUDIO_QUEUED_MS:AtomicU64=AtomicU64::new(0);
+pub(crate) static AUDIO_ARRIVAL_US:AtomicU64=AtomicU64::new(0);
+pub(crate) static PACING_GUARDS:AtomicU64=AtomicU64::new(0);
+pub(crate) static TELEMETRY_MISSED:AtomicU64=AtomicU64::new(0);
+pub(crate) fn presented(stages:PresentedStages){if let Ok(mut s)=STAGES.try_lock(){s.last=Some(stages);s.sum=s.sum.saturating_add(stages.total_us);s.max=s.max.max(stages.total_us);s.count+=1;if s.totals.len()<256{s.totals.push(stages.total_us);}if stages.present_gap_us>0 && s.gaps.len()<256{s.gaps.push(stages.present_gap_us);}}else{TELEMETRY_MISSED.fetch_add(1,Ordering::Relaxed);}}
+pub(crate) fn clear_stages(){if let Ok(mut s)=STAGES.lock(){*s=StageWindow::default();}QUEUE_DEPTH.store(0,Ordering::Relaxed);STALE_HANDOFFS.store(0,Ordering::Relaxed);OUTPUT_REPLACEMENTS.store(0,Ordering::Relaxed);CATCH_UP_REPLACEMENTS.store(0,Ordering::Relaxed);FRAME_WAKES.store(0,Ordering::Relaxed);IDLE_SWAPS_SAVED.store(0,Ordering::Relaxed);PACING_GUARDS.store(0,Ordering::Relaxed);TELEMETRY_MISSED.store(0,Ordering::Relaxed);}
 
 pub(crate) struct VideoMetrics {
     pub(crate) rtp_assembly_sum_us: AtomicU64,
@@ -67,7 +71,7 @@ pub(crate) fn snapshot() -> crate::streaming::hud::PlaybackMetrics {
         decoded:METRICS.decoded.swap(0,Ordering::Relaxed),presented:METRICS.presented.swap(0,Ordering::Relaxed),
         decode_us:METRICS.decode_us.load(Ordering::Relaxed),queue_age_us:METRICS.pipeline_age_us.load(Ordering::Relaxed),
         input_us:METRICS.input_dispatch_us.load(Ordering::Relaxed),display_us:METRICS.display_queue_us.load(Ordering::Relaxed),
-        pipeline_us:METRICS.total_video_pipeline_us.load(Ordering::Relaxed),audio_ms:METRICS.audio_target_ms.load(Ordering::Relaxed),
+        pipeline_us:METRICS.total_video_pipeline_us.load(Ordering::Relaxed),audio_ms:METRICS.audio_target_ms.load(Ordering::Relaxed),audio_queued_ms:AUDIO_QUEUED_MS.load(Ordering::Relaxed),audio_arrival_us:AUDIO_ARRIVAL_US.load(Ordering::Relaxed),pacing_guards:PACING_GUARDS.load(Ordering::Relaxed),telemetry_missed:TELEMETRY_MISSED.load(Ordering::Relaxed),
         underruns:METRICS.audio_underruns.load(Ordering::Relaxed),audio_drops:METRICS.audio_drops.load(Ordering::Relaxed),
         skipped:METRICS.skipped.swap(0,Ordering::Relaxed),replaced:METRICS.replaced.swap(0,Ordering::Relaxed),
         queue_full:METRICS.queue_full.swap(0,Ordering::Relaxed),resyncs:METRICS.resyncs.load(Ordering::Relaxed),resets:METRICS.resets.load(Ordering::Relaxed),

@@ -8,10 +8,17 @@ use std::time::{Duration, Instant};
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Config { pub rear: bool, pub front: bool, pub swap: bool, pub map: [u8;16], pub deadzone_percent:u8 }
 #[derive(Clone)]
-pub struct NativeSample { pub frame:GamepadFrame, pub sampled_at:Instant, pub edge:Option<u64> }
+pub struct NativeSample { pub frame:GamepadFrame, pub sampled_at:Instant, pub changed_at:Instant, pub edge:Option<u64> }
 struct State { config:Option<Config>, sample:Option<NativeSample>, edges:VecDeque<NativeSample>, generation:u64, next_id:u64 }
 static STATE:Mutex<State>=Mutex::new(State {config:None,sample:None,edges:VecDeque::new(),generation:0,next_id:0});
 static WAKE:Condvar=Condvar::new();
+pub(crate) static INPUT_CHANGED:tokio::sync::Notify=tokio::sync::Notify::const_new();
+static CHANGE_COUNT:AtomicU64=AtomicU64::new(0);
+static CHANGE_SUM_US:AtomicU64=AtomicU64::new(0);
+static CHANGE_MAX_US:AtomicU64=AtomicU64::new(0);
+static CHANGE_LAST_US:AtomicU64=AtomicU64::new(0);
+pub(crate) fn dispatch_change(us:u64){CHANGE_COUNT.fetch_add(1,Ordering::Relaxed);CHANGE_SUM_US.fetch_add(us,Ordering::Relaxed);CHANGE_MAX_US.fetch_max(us,Ordering::Relaxed);CHANGE_LAST_US.store(us,Ordering::Relaxed);}
+pub(crate) fn change_metrics()->(u64,u64,u64,u64){let n=CHANGE_COUNT.load(Ordering::Relaxed);(n,CHANGE_LAST_US.load(Ordering::Relaxed),CHANGE_SUM_US.load(Ordering::Relaxed).checked_div(n).unwrap_or(0),CHANGE_MAX_US.load(Ordering::Relaxed))}
 static STARTED:OnceLock<bool>=OnceLock::new();
 static SUPPRESS_UNTIL:Mutex<Option<Instant>>=Mutex::new(None);
 const EDGE_LIMIT:usize=8;
@@ -93,13 +100,15 @@ fn run(){
                         let changed=s.sample.as_ref().is_some_and(|old|old.frame!=frame);
                         let edge=s.sample.as_ref().is_some_and(|old|old.frame.digital_mask()!=frame.digital_mask());
                         if changed{fast_until=sampled_at+Duration::from_millis(100);}
-                        let sample=NativeSample{frame,sampled_at,edge:None};
+                        let changed_at=if changed{sampled_at}else{s.sample.as_ref().map(|s|s.changed_at).unwrap_or(sampled_at)};
+                        let sample=NativeSample{frame,sampled_at,changed_at,edge:None};
                         if edge && !suppressed(){
                             if s.edges.len()>=EDGE_LIMIT{EDGE_DROPS.fetch_add(s.edges.len() as u64,Ordering::Relaxed);s.edges.clear();}
                             s.next_id=s.next_id.wrapping_add(1);
                             let mut e=sample.clone();e.edge=Some(s.next_id);s.edges.push_back(e);
                         }
-                        s.sample=Some(sample);
+                        let first=s.sample.is_none();s.sample=Some(sample);
+                        if (changed||first) && crate::settings::latency_mode()==2{INPUT_CHANGED.notify_one();}
                     },
                     None=>{s.sample=None;s.edges.clear();previous_timestamp=None;}
                 }

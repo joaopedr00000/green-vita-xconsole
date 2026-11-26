@@ -103,3 +103,24 @@ mod latency_lab_tests{
         assert_eq!(late_wait_us(1,true),2000);
     }
 }
+
+pub fn audio_start_ms(mode:u8,baseline:u32)->u32{if mode==2{baseline.saturating_sub(20).max(40)}else{baseline}}
+pub fn audio_floor_ms(mode:u8,baseline:u32)->u32{if mode==2{baseline.saturating_sub(30).max(40)}else{baseline}}
+pub fn audio_next_target_ms(current:u32,floor:u32,stable:bool,low_water_ms:u32)->u32{
+    if !stable || low_water_ms<20{return current;}current.saturating_sub(5).max(floor)
+}
+pub fn pacing_guard_us(mode:u8,source_fps:Option<f64>,elapsed_us:u64,ready:bool)->u64{
+    if mode!=2 || !ready || !source_fps.is_some_and(|f|f.is_finite()&&(50.0..=75.0).contains(&f)){return 0;}
+    12_000u64.saturating_sub(elapsed_us).min(2_000)
+}
+pub fn nack_grace_ms(mode:u8,unrequested_age_us:u64,samples:u64)->u64{
+    if mode!=2 || samples<16{return 12;}
+    (unrequested_age_us.saturating_add(3_000).div_ceil(1000)).clamp(12,18)
+}
+#[cfg(test)]
+mod refinements{
+    use super::*;
+    #[test]fn audio_headroom(){assert_eq!(audio_start_ms(2,80),60);assert_eq!(audio_floor_ms(2,80),50);assert_eq!(audio_start_ms(0,80),80);assert_eq!(audio_next_target_ms(60,50,true,19),60);assert_eq!(audio_next_target_ms(60,50,true,20),55);assert_eq!(audio_next_target_ms(50,50,true,30),50);assert_eq!(audio_next_target_ms(60,50,false,30),60);}
+    #[test]fn pacing_bounds(){assert_eq!(pacing_guard_us(2,Some(60.0),9000,true),2000);assert_eq!(pacing_guard_us(2,Some(60.0),11500,true),500);assert_eq!(pacing_guard_us(2,Some(60.0),12000,true),0);assert_eq!(pacing_guard_us(0,Some(60.0),9000,true),0);assert_eq!(pacing_guard_us(2,Some(30.0),9000,true),0);assert_eq!(pacing_guard_us(2,Some(60.0),9000,false),0);}
+    #[test]fn nack_bounds(){assert_eq!(nack_grace_ms(2,15000,15),12);assert_eq!(nack_grace_ms(0,15000,100),12);assert_eq!(nack_grace_ms(2,100,100),12);assert_eq!(nack_grace_ms(2,11100,100),15);assert_eq!(nack_grace_ms(2,100000,100),18);}
+}

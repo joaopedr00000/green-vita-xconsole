@@ -110,6 +110,9 @@ pub struct AudioRenderer {
     fade_next_packet: bool,
     retry_worker_after: Instant,
     worker_ready: bool,
+    low_water_ms:u32,
+    last_arrival:Option<Instant>,
+    arrival_gap_us:u64,
 }
 
 impl AudioRenderer {
@@ -137,16 +140,13 @@ impl AudioRenderer {
             packets_tx,
             samples_rx,
             started: false,
-            prebuffer_ms: match active_stream_profile() {
-                StreamProfile::LowLatency => 50,
-                StreamProfile::Balanced => 60,
-                StreamProfile::Quality => 80,
-            },
+            prebuffer_ms:super::policy::audio_start_ms(crate::settings::latency_mode(),baseline_ms()),
             last_underrun: Instant::now(),
             last_adjustment: Instant::now(),
             fade_next_packet: true,
             retry_worker_after: Instant::now(),
             worker_ready: true,
+            low_water_ms:u32::MAX,last_arrival:None,arrival_gap_us:0,
         })
     }
 
@@ -155,6 +155,13 @@ impl AudioRenderer {
             if Instant::now() >= self.retry_worker_after { self.restart_decode_worker(); }
             if !self.worker_ready { return; }
         }
+        let now=Instant::now();
+        let queued_ms=self.queue.size().saturating_mul(1000)/AUDIO_BYTES_PER_SECOND;
+        if self.started{self.low_water_ms=self.low_water_ms.min(queued_ms);}
+        if !packets.is_empty(){
+            if let Some(at)=self.last_arrival{let us=now.saturating_duration_since(at).as_micros().min(1_000_000) as u64;self.arrival_gap_us=(self.arrival_gap_us.saturating_mul(7)+us)/8;}
+            self.last_arrival=Some(now);
+        }
         if self.started && self.queue.size() == 0 {
             self.queue.pause();
             self.started = false;
@@ -162,18 +169,17 @@ impl AudioRenderer {
             self.prebuffer_ms = (self.prebuffer_ms + 10).min(110);
             self.last_underrun = Instant::now();
             self.last_adjustment = Instant::now();
+            self.low_water_ms=u32::MAX;
             METRICS.audio_underruns.fetch_add(1, Ordering::Relaxed);
             self.fade_next_packet = true;
         }
         if self.last_underrun.elapsed() >= Duration::from_secs(30)
             && self.last_adjustment.elapsed() >= Duration::from_secs(30) {
-            let baseline = match active_stream_profile() {
-                StreamProfile::LowLatency => 50,
-                StreamProfile::Balanced => 60,
-                StreamProfile::Quality => 80,
-            };
-            self.prebuffer_ms = self.prebuffer_ms.saturating_sub(5).max(baseline);
-            self.last_adjustment = Instant::now();
+            let mode=crate::settings::latency_mode();
+            let floor=super::policy::audio_floor_ms(mode,baseline_ms());
+            self.prebuffer_ms=if mode==2{super::policy::audio_next_target_ms(self.prebuffer_ms,floor,self.started,self.low_water_ms)}else{self.prebuffer_ms.saturating_sub(5).max(floor)};
+            self.low_water_ms=u32::MAX;
+            self.last_adjustment=Instant::now();
         }
         METRICS.audio_target_ms.store(self.prebuffer_ms as u64, Ordering::Relaxed);
 
@@ -233,10 +239,15 @@ impl AudioRenderer {
                 }
             }
         }
+        crate::streaming::video::metrics::AUDIO_QUEUED_MS.store((self.queue.size() as u64)*1000/(AUDIO_BYTES_PER_SECOND as u64),Ordering::Relaxed);
+        crate::streaming::video::metrics::AUDIO_ARRIVAL_US.store(self.arrival_gap_us,Ordering::Relaxed);
     }
 
     pub fn clear_session(&mut self) {
-        self.prebuffer_ms = baseline_ms();
+        self.prebuffer_ms=super::policy::audio_start_ms(crate::settings::latency_mode(),baseline_ms());
+        self.low_water_ms=u32::MAX;self.last_arrival=None;self.arrival_gap_us=0;
+        crate::streaming::video::metrics::AUDIO_QUEUED_MS.store(0,Ordering::Relaxed);
+        crate::streaming::video::metrics::AUDIO_ARRIVAL_US.store(0,Ordering::Relaxed);
         self.last_underrun = Instant::now();
         self.last_adjustment = Instant::now();
         self.retire_decode_worker();

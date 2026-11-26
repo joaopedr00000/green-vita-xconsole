@@ -124,6 +124,9 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                     row(ui,tr("Datagramas RX / TX","Datagrams RX / TX"),format!("{} / {}",h.rx_packets,h.tx_packets),white);
                     row(ui,tr("Lacunas / atrasados","Gaps / late"),format!("{} / {}",h.gaps,h.late),white);
                     row(ui,tr("NACK pedidos / pacotes","NACK requests / packets"),format!("{} / {}",h.nacks,h.nack_packets),white);
+                    row(ui,tr("Atrasados sem NACK","Late without NACK"),h.unrequested_late.to_string(),white);
+                    row(ui,tr("Expirados / não rastreados","Expired / untracked"),format!("{} / {}",h.expired_missing,h.untracked_missing),white);
+                    row(ui,tr("Espera NACK","NACK grace"),format!("{} ms",h.nack_grace_ms),white);
                     row(ui,tr("Erros de socket","Socket errors"),h.socket_errors.to_string(),white);
                     row(ui,tr("RTT médio ICE","Mean ICE RTT"),h.rtt.map(|r|millis(r.average_us)).unwrap_or_else(||"—".to_owned()),white);
                     row(ui,tr("Respostas / idade obs.","Replies / observed age"),h.rtt.map(|r|format!("{} / {} s",r.responses,r.age().as_secs())).unwrap_or_else(||"—".to_owned()),white);
@@ -143,7 +146,7 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                     row(ui,tr("Recuperação de fila¹","Queue catch-up¹"),format!("{} · {}",tr("Auto","Auto"),m.catch_up_replacements),white);
                     row(ui,tr("Descartes / erros","Drops / errors"),format!("{} / {}",h.dropped,h.errors),white);
                     row(ui,tr("Resync / reset¹","Resync / reset¹"),format!("{} / {}",m.resyncs,m.resets),white);
-                    row(ui,tr("Buffer de áudio","Audio target"),format!("{} ms",m.audio_ms),white);
+                    row(ui,tr("Áudio alvo / fila SDL","Audio target / SDL queue"),format!("{} / {} ms",m.audio_ms,m.audio_queued_ms),white);
                     row(ui,tr("Áudio falhas / perdas¹","Audio underrun / drops¹"),format!("{} / {}",m.underruns,m.audio_drops),white);
                 },
                 3=>{
@@ -157,6 +160,9 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                     row(ui,tr("Envios nativo / SDL¹","Native / SDL sends¹"),format!("{} / {}",input.native_count,input.sdl_count),white);
                     row(ui,tr("Transições perdidas¹","Edge drops¹"),input.edge_drops.to_string(),white);
                     row(ui,tr("Zona morta nativa","Native deadzone"),format!("{}%",app.settings.native_deadzone_percent),white);
+                    let (n,last,avg,max)=crate::native_input::change_metrics();
+                    row(ui,tr("Mudança RAW / envio¹","RAW change / send¹"),if n>0{millis(last)}else{"—".to_owned()},white);
+                    row(ui,tr("Mudança méd / máx¹","Change avg / max¹"),if n>0{format!("{:.2} / {:.2} ms",avg as f64/1000.0,max as f64/1000.0)}else{"—".to_owned()},white);
                 },
                 4=>{
                     section(ui,tr("VISÃO TÉCNICA","TECHNICAL OVERVIEW"));
@@ -166,10 +172,11 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                     row(ui,tr("Fila cheia / trocas","Queue full / replaced"),format!("{} / {}",m.queue_full,m.replaced),white);
                     row(ui,tr("Pipeline / intervalo p95","Pipeline / interval p95"),if m.stage_samples>0{format!("{:.1} / {:.1} ms",m.pipeline_p95_us as f64/1000.0,m.gap_p95_us as f64/1000.0)}else{"—".to_owned()},white);
                     row(ui,tr("Despertares / swaps evit.","Wakes / swaps saved"),format!("{} / {}",m.frame_wakes,m.idle_swaps_saved),white);
+                    row(ui,tr("Cadência / amostras perd.","Pacing / missed samples"),format!("{} / {}",m.pacing_guards,m.telemetry_missed),white);
                     row(ui,tr("Montagem / decode","Assembly / decode"),format!("{:.1} / {:.1} ms",m.rtp_avg_us as f64/1000.0,m.decode_us as f64/1000.0),white);
                     row(ui,tr("Antes / chamada present","Before / present call"),m.stages.map(|s|format!("{:.1} / {:.1} ms",s.pre_present_us as f64/1000.0,s.present_call_us as f64/1000.0)).unwrap_or_else(||"—".to_owned()),white);
                     row(ui,tr("Espera quadro / desenho","Frame wait / draw"),m.stages.map(|s|format!("{:.1} / {:.1} ms",s.claim_us as f64/1000.0,s.draw_us as f64/1000.0)).unwrap_or_else(||"—".to_owned()),white);
-                    row(ui,tr("Buffer de áudio","Audio target"),format!("{} ms",m.audio_ms),white);
+                    row(ui,tr("Áudio alvo / fila SDL","Audio target / SDL queue"),format!("{} / {} ms",m.audio_ms,m.audio_queued_ms),white);
                     row(ui,tr("Recuperação IDR","IDR recovery"),if h.waiting{tr("Aguardando","Waiting")}else{tr("Normal","Normal")},white);
                     let modes=if pt{["Clássico","Adaptativo","Extremo"]}else{["Classic","Adaptive","Extreme"]};
                     row(ui,tr("Sincronização","Pacing"),modes[app.settings.latency_mode.min(2) as usize],white);

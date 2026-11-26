@@ -293,10 +293,12 @@ async fn run_session<B: super::session::RtcSessionBackend>(
             .and_then(|mut latest| latest.take());
         let mut native_edge = None;
         let mut native_source = false;
+        let mut native_change_at=None;
         if !stopping.load(Ordering::Acquire) && active_gamepad_pulse.is_none() && latest.as_ref().is_none_or(|s| s.frame.view == 0.0) {
             if let Some(sample) = crate::native_input::latest() {
                 native_source = true;
                 native_edge = sample.edge;
+                native_change_at=Some(sample.changed_at);
                 latest = Some(SampledGamepadFrame { frame:sample.frame, sampled_at:sample.sampled_at });
             }
         }
@@ -332,16 +334,17 @@ async fn run_session<B: super::session::RtcSessionBackend>(
         } else if let Some(sampled) = latest {
             if sampled.sampled_at.elapsed() < Duration::from_millis(100) {
                 let at=sampled.sampled_at;
+                let changed=last_gamepad_sent.as_ref().is_none_or(|(f,_)|*f!=sampled.frame);
                 if send_sampled_gamepad_frame(&mut session, sampled, &mut last_gamepad_sent, native_edge.is_some()) {
                     crate::native_input::dispatch(native_source, at.elapsed().as_micros() as u64);
+                    if changed{if let Some(at)=native_change_at{crate::native_input::dispatch_change(at.elapsed().as_micros() as u64);}}
                     if let Some(edge)=native_edge { crate::native_input::acknowledge(edge); }
                 }
             }
         }
         if !stale_released && active_gamepad_pulse.is_none() && last_input_sample.elapsed() >= Duration::from_millis(100) {
-            send_sampled_gamepad_frame(&mut session, SampledGamepadFrame { frame: GamepadFrame::default(), sampled_at: Instant::now() }, &mut last_gamepad_sent, true);
-            // Retry neutral if the channel was not writable, without spamming the log.
-            stale_released = last_gamepad_sent.as_ref().is_some_and(|(frame, _)| *frame == GamepadFrame::default());
+            stale_released=send_sampled_gamepad_frame(&mut session, SampledGamepadFrame { frame: GamepadFrame::default(), sampled_at: Instant::now() }, &mut last_gamepad_sent, true);
+            // Retry until neutral is actually accepted.
             if stale_released { crate::diagnostics::step("controller", "STALE_NEUTRAL"); }
         }
 
@@ -424,6 +427,7 @@ async fn run_session<B: super::session::RtcSessionBackend>(
                 readable.context("failed waiting for WebRTC UDP socket")?;
             }
             _ = session.video.decoder.result_ready.notified() => {}
+            _ = crate::native_input::INPUT_CHANGED.notified(), if crate::settings::latency_mode()==2 => {}
             _ = tokio::time::sleep(PUMP_SLEEP) => {}
         }
     }

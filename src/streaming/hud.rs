@@ -4,7 +4,7 @@ use std::time::{Duration,Instant};
 pub(crate) struct PlaybackMetrics {
     pub decoded:u64,pub presented:u64,pub rtp_avg_us:u64,pub rtp_max_us:u64,
     pub decode_us:u64,pub queue_age_us:u64,pub input_us:u64,pub display_us:u64,pub pipeline_us:u64,
-    pub audio_ms:u64,pub underruns:u64,pub audio_drops:u64,pub skipped:u64,pub replaced:u64,
+    pub audio_ms:u64,pub audio_queued_ms:u64,pub audio_arrival_us:u64,pub pacing_guards:u64,pub telemetry_missed:u64,pub underruns:u64,pub audio_drops:u64,pub skipped:u64,pub replaced:u64,
     pub queue_full:u64,pub resyncs:u64,pub resets:u64,
     pub stages:Option<PresentedStages>,pub pipeline_avg_us:u64,pub pipeline_max_us:u64,pub stage_samples:u64,pub queue_depth:u64,pub stale_handoffs:u64,pub output_replacements:u64,pub catch_up_replacements:u64,pub frame_wakes:u64,pub idle_swaps_saved:u64,pub pipeline_p95_us:u64,pub gap_p95_us:u64,
 }
@@ -15,7 +15,7 @@ pub(crate) struct StreamHud {
     pub rtt:Option<RttReading>,
     pub rx_total:u64,pub tx_total:u64,pub rx_packets:u64,pub tx_packets:u64,pub socket_errors:u64,
     pub video_bps:u64,pub requested_bps:u64,pub jitter_us:u64,pub gaps:u64,pub late:u64,
-    pub nacks:u64,pub nack_packets:u64,pub waiting:bool,pub dropped:u64,pub errors:u64,
+    pub nacks:u64,pub nack_packets:u64,pub unrequested_late:u64,pub expired_missing:u64,pub untracked_missing:u64,pub nack_grace_ms:u64,pub waiting:bool,pub dropped:u64,pub errors:u64,
 }
 pub(crate) fn rate(bytes:u64, seconds:f64)->u64 {
     if !seconds.is_finite() || seconds<=0.0 {return 0;}

@@ -15,7 +15,6 @@ const STREAM_STATS_INTERVAL: Duration = Duration::from_secs(1);
 const NACK_MAX_GAP: u16 = 48;
 const NACK_MAX_PENDING: usize = 64;
 const NACK_REPORT_LIMIT: usize = 24;
-const NACK_GRACE: Duration = Duration::from_millis(12);
 const NACK_INTERVAL: Duration = Duration::from_millis(35);
 const NACK_EXPIRY: Duration = Duration::from_millis(180);
 
@@ -47,7 +46,8 @@ pub(crate) struct VideoReceiver {
     last_decoder_error_logged: Option<Instant>,
     pending_recovery_log: bool,
     expected_video_sequence: Option<u16>,
-    missing_video_packets: Vec<(u16, Instant)>,
+    missing_video_packets: Vec<(u16, Instant, bool)>,
+    late_age_us:u64,unrequested_samples:u64,expired_missing:u64,untracked_missing:u64,unrequested_late:u64,
     last_nack_report: Option<Instant>,
     last_rtp_arrival: Option<(Instant, u32)>,
     jitter_us: u64,
@@ -77,7 +77,8 @@ impl VideoReceiver {
             last_decoder_error_logged: None,
             pending_recovery_log: false,
             expected_video_sequence: None,
-            missing_video_packets: Vec::new(),
+            missing_video_packets: Vec::with_capacity(NACK_MAX_PENDING),
+            late_age_us:0,unrequested_samples:0,expired_missing:0,untracked_missing:0,unrequested_late:0,
             last_nack_report: None,
             last_rtp_arrival: None,
             jitter_us: 0,
@@ -99,6 +100,7 @@ impl VideoReceiver {
         self.ssrc = Some(ssrc);
         self.expected_video_sequence = None;
         self.missing_video_packets.clear();
+        self.late_age_us=0;self.unrequested_samples=0;self.expired_missing=0;self.untracked_missing=0;self.unrequested_late=0;
         self.last_nack_report = None;
         self.last_rtp_arrival = None;
         self.jitter_us = 0;
@@ -199,12 +201,17 @@ impl VideoReceiver {
     /// Observe sequence gaps without assuming late packets are irretrievably lost.
     /// A missing packet is discarded from this list on arrival or after 180ms.
     fn record_video_sequence(&mut self, sequence: u16, now: Instant) {
-        if self.missing_video_packets.iter().any(|(seq, _)| *seq == sequence) {
-            self.stats.recovered_or_late_packets = self.stats.recovered_or_late_packets.saturating_add(1);
+        self.expire_missing(now);
+        if let Some(index)=self.missing_video_packets.iter().position(|(seq,_,_)|*seq==sequence){
+            let (_,at,requested)=self.missing_video_packets.remove(index);
+            self.stats.recovered_or_late_packets=self.stats.recovered_or_late_packets.saturating_add(1);
+            if !requested{
+                let us=now.saturating_duration_since(at).as_micros().min(180_000) as u64;
+                self.late_age_us=if self.unrequested_samples==0{us}else{(self.late_age_us.saturating_mul(7)+us)/8};
+                self.unrequested_samples=self.unrequested_samples.saturating_add(1);
+                self.unrequested_late=self.unrequested_late.saturating_add(1);
+            }
         }
-        self.missing_video_packets.retain(|(seq, at)| {
-            *seq != sequence && now.duration_since(*at) <= NACK_EXPIRY
-        });
         if let Some(expected) = self.expected_video_sequence {
             let distance = sequence.wrapping_sub(expected);
             if distance == 0 {
@@ -214,14 +221,14 @@ impl VideoReceiver {
                     self.stats.detected_sequence_gaps = self.stats.detected_sequence_gaps.saturating_add(u64::from(distance));
                     for offset in 0..distance {
                         if self.missing_video_packets.len() >= NACK_MAX_PENDING {
-                            break;
+                            self.untracked_missing=self.untracked_missing.saturating_add(u64::from(distance-offset));break;
                         }
                         let lost = expected.wrapping_add(offset);
-                        if !self.missing_video_packets.iter().any(|(seq, _)| *seq == lost) {
-                            self.missing_video_packets.push((lost, now));
+                        if !self.missing_video_packets.iter().any(|(seq,_,_)| *seq == lost) {
+                            self.missing_video_packets.push((lost,now,false));
                         }
                     }
-                }
+                }else{self.untracked_missing=self.untracked_missing.saturating_add(u64::from(distance));}
                 self.expected_video_sequence = Some(sequence.wrapping_add(1));
             }
             // Very old/out-of-order packet: do not advance the sequence cursor.
@@ -233,22 +240,22 @@ impl VideoReceiver {
     /// Real, bounded receiver-side RTCP NACK. The remote sender may ignore it,
     /// but this at least asks for missing packets rather than merely advertising
     /// NACK in the SDP. The peer type remains unchanged (Vita RTC compatibility).
+    fn expire_missing(&mut self,now:Instant){let before=self.missing_video_packets.len();self.missing_video_packets.retain(|(_,at,_)|now.saturating_duration_since(*at)<=NACK_EXPIRY);self.expired_missing=self.expired_missing.saturating_add((before-self.missing_video_packets.len()) as u64);}
+    fn nack_grace_ms(&self)->u64{crate::streaming::policy::nack_grace_ms(crate::settings::latency_mode(),self.late_age_us,self.unrequested_samples)}
     pub(crate) fn request_nack(&mut self, peer: &mut RTCPeerConnection, now: Instant) {
-        self.missing_video_packets.retain(|(_, at)| {
-            now.duration_since(*at) <= NACK_EXPIRY
-        });
+        self.expire_missing(now);
+        if self.missing_video_packets.is_empty(){return;}
         if self.last_nack_report.is_some_and(|last| {
             now.duration_since(last) < NACK_INTERVAL
         }) {
             return;
         }
-        let nacks: Vec<_> = self.missing_video_packets.iter()
-            .filter(|(_, at)| now.duration_since(*at) >= NACK_GRACE)
-            .take(NACK_REPORT_LIMIT)
-            .map(|(seq, _)| {
-                rtcp::transport_feedbacks::transport_layer_nack::NackPair::new(*seq)
-            })
-            .collect();
+        let grace=Duration::from_millis(self.nack_grace_ms());
+        let mut selected=[0u16;NACK_REPORT_LIMIT];let mut count=0;
+        for (seq,at,_) in &self.missing_video_packets{
+            if now.saturating_duration_since(*at)>=grace && count<NACK_REPORT_LIMIT{selected[count]=*seq;count+=1;}
+        }
+        let nacks:Vec<_>=selected[..count].iter().map(|seq|rtcp::transport_feedbacks::transport_layer_nack::NackPair::new(*seq)).collect();
         if nacks.is_empty() {
             return;
         }
@@ -262,6 +269,7 @@ impl VideoReceiver {
                 nacks,
             };
             if receiver.write_rtcp(vec![Box::new(nack)]).is_ok() {
+                for (seq,_,requested) in &mut self.missing_video_packets{if selected[..count].contains(seq){*requested=true;}}
                 self.last_nack_report = Some(now);
                 self.stats.nack_requests = self.stats.nack_requests.saturating_add(1);
                 self.stats.nack_packets = self.stats.nack_packets.saturating_add(report_count);
@@ -338,7 +346,7 @@ impl VideoReceiver {
             .encoded_resolution
             .map(|(width, height)| format!("{width}x{height}"))
             .unwrap_or_else(|| "?".to_owned());
-        let hud=crate::streaming::hud::StreamHud {at:now,elapsed,server:None,encoded:self.stats.encoded_resolution,source_fps:self.cadence.estimate(),playback,rtt:None,rx_bps:0,tx_bps:0,rx_total:0,tx_total:0,rx_packets:0,tx_packets:0,socket_errors:0,video_bps:(rx_mbps*1_000_000.0) as u64,requested_bps:(self.bitrate.current_mbps()*1_000_000.0) as u64,jitter_us:self.jitter_us,gaps:self.stats.detected_sequence_gaps,late:self.stats.recovered_or_late_packets,nacks:self.stats.nack_requests,nack_packets:self.stats.nack_packets,waiting:self.rtp.waiting_for_keyframe(),dropped:self.stats.dropped,errors:self.stats.decode_errors};
+        let hud=crate::streaming::hud::StreamHud {at:now,elapsed,server:None,encoded:self.stats.encoded_resolution,source_fps:self.cadence.estimate(),playback,rtt:None,rx_bps:0,tx_bps:0,rx_total:0,tx_total:0,rx_packets:0,tx_packets:0,socket_errors:0,video_bps:(rx_mbps*1_000_000.0) as u64,requested_bps:(self.bitrate.current_mbps()*1_000_000.0) as u64,jitter_us:self.jitter_us,gaps:self.stats.detected_sequence_gaps,late:self.stats.recovered_or_late_packets,nacks:self.stats.nack_requests,nack_packets:self.stats.nack_packets,unrequested_late:self.unrequested_late,expired_missing:self.expired_missing,untracked_missing:self.untracked_missing,nack_grace_ms:self.nack_grace_ms(),waiting:self.rtp.waiting_for_keyframe(),dropped:self.stats.dropped,errors:self.stats.decode_errors};
         Some((format!(
             "enc:{encoded_resolution} srcfps:{source_fps} {performance} rx:{rx_mbps:.1}Mbps remb:{:.1}Mbps jitter:{}ms gaps:{} late:{} nack:{}/{} wait:{} drop:{} err:{}",
             self.bitrate.current_mbps(),
