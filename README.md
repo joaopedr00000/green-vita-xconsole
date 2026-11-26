@@ -27,7 +27,7 @@ You need a homebrew-enabled PS Vita with VitaShell and an Xbox account that has
 access to Xbox Cloud Gaming.
 
 1. Download `green-vita.vpk` from the
-   [GreenVita v0.3.1 stable release](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.3.1).
+   [GreenVita v0.3.2 Final](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.3.2). The previous [v0.3.1 release](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.3.1) remains available for rollback.
    For the earlier stable experiment, use the [v0.2.0 beta](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.2.0-beta.1).
 2. Transfer the VPK to the Vita.
 3. Install it with VitaShell.
@@ -189,10 +189,6 @@ endorsed by Microsoft, Xbox, Sony, or PlayStation.
 
 GreenVita is licensed under the [Mozilla Public License 2.0](LICENSE).
 
-## 0.3.2 development candidate
+## 0.3.2 Final
 
-Based on v0.3.1 Final. AES-256-GCM token vault with legacy migration, bounded deferred diagnostics, adaptive PCM queue and stale-controller neutralization. Physical Vita validation is required before declaring a stable release. Do not share token, backup or stage files.
-
-The candidate also includes optional independent 4 ms native handheld polling, button remapping, hotplug handling, lifecycle interruption recovery, focused artwork loading, measured compressed queue age, and adaptive RTP reordering. Native polling is disabled by default pending hardware tests. The 0.3.1 release remains the stable rollback.
-
-**Video regression rollback:** the 0.3.2 candidate now uses the v0.3.1 Final video receive, decode and presentation pipeline again (with observational telemetry only). Earlier experimental video queue/pacing changes are not active.
+Global Gamepad RAW, adaptive presentation queue recovery, direct decoded texture handoff, optimized diagnostic HUD, ICE RTT telemetry and AES-256-GCM credential vault. Six final physical Vita samples measured 40.70–60.29 ms local pipeline latency (50.05 ms arithmetic mean), at 57–58 presented FPS. These are short snapshots, not total input-to-screen latency. The tested VPK is from Actions run #45765033213. See [bilingual release notes](docs/releases/v0.3.2.md) for details and limitations.
