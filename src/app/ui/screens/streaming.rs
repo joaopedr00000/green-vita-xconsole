@@ -151,7 +151,7 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                 },
                 3=>{
                     section(ui,tr("CONTROLES","INPUT"));
-                    row(ui,tr("Leitura ativa","Active input"),if input.native_active{"Gamepad RAW"}else{"SDL2"},white);
+                    row(ui,tr("Último envio aceito","Last accepted input"),match crate::native_input::last_source(){1=>"Gamepad RAW",2=>"SDL2",_=>"—"},white);
                     row(ui,tr("Intervalo méd / máx¹","Poll avg / max¹"),if input.polls>0{format!("{:.2} / {:.2} ms",input.interval_us as f64/1000.0,input.max_interval_us as f64/1000.0)}else{"—".to_owned()},white);
                     row(ui,tr("Consultas nativas¹","Native samples¹"),input.polls.to_string(),white);
                     row(ui,tr("Amostras repetidas¹","Repeated samples¹"),format!("{}%",input.repeat_percent),white);
@@ -172,7 +172,7 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                     row(ui,tr("Fila cheia / trocas","Queue full / replaced"),format!("{} / {}",m.queue_full,m.replaced),white);
                     row(ui,tr("Pipeline / intervalo p95","Pipeline / interval p95"),if m.stage_samples>0{format!("{:.1} / {:.1} ms",m.pipeline_p95_us as f64/1000.0,m.gap_p95_us as f64/1000.0)}else{"—".to_owned()},white);
                     row(ui,tr("Despertares / swaps evit.","Wakes / swaps saved"),format!("{} / {}",m.frame_wakes,m.idle_swaps_saved),white);
-                    row(ui,tr("Cadência / amostras perd.","Pacing / missed samples"),format!("{} / {}",m.pacing_guards,m.telemetry_missed),white);
+                    row(ui,tr("Áudio ajuste / telem. perd.","Audio trim / missed telem."),format!("{:.1} ms / {}",m.audio_trim_frames as f64/48.0,m.telemetry_missed),white);
                     row(ui,tr("Montagem / decode","Assembly / decode"),format!("{:.1} / {:.1} ms",m.rtp_avg_us as f64/1000.0,m.decode_us as f64/1000.0),white);
                     row(ui,tr("Antes / chamada present","Before / present call"),m.stages.map(|s|format!("{:.1} / {:.1} ms",s.pre_present_us as f64/1000.0,s.present_call_us as f64/1000.0)).unwrap_or_else(||"—".to_owned()),white);
                     row(ui,tr("Espera quadro / desenho","Frame wait / draw"),m.stages.map(|s|format!("{:.1} / {:.1} ms",s.claim_us as f64/1000.0,s.draw_us as f64/1000.0)).unwrap_or_else(||"—".to_owned()),white);
@@ -180,7 +180,7 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                     row(ui,tr("Recuperação IDR","IDR recovery"),if h.waiting{tr("Aguardando","Waiting")}else{tr("Normal","Normal")},white);
                     let modes=if pt{["Clássico","Adaptativo","Extremo"]}else{["Classic","Adaptive","Extreme"]};
                     row(ui,tr("Sincronização","Pacing"),modes[app.settings.latency_mode.min(2) as usize],white);
-                    row(ui,tr("Controle","Input"),if input.native_active{"Gamepad RAW"}else{"SDL2"},white);
+                    row(ui,tr("Controle","Input"),match crate::native_input::last_source(){1=>"Gamepad RAW",2=>"SDL2",_=>"—"},white);
                 },
                 _=>{}
             }

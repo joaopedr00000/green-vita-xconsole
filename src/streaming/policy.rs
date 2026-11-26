@@ -109,10 +109,6 @@ pub fn audio_floor_ms(mode:u8,baseline:u32)->u32{if mode==2{baseline.saturating_
 pub fn audio_next_target_ms(current:u32,floor:u32,stable:bool,low_water_ms:u32)->u32{
     if !stable || low_water_ms<20{return current;}current.saturating_sub(5).max(floor)
 }
-pub fn pacing_guard_us(mode:u8,source_fps:Option<f64>,elapsed_us:u64,ready:bool)->u64{
-    if mode!=2 || !ready || !source_fps.is_some_and(|f|f.is_finite()&&(50.0..=75.0).contains(&f)){return 0;}
-    12_000u64.saturating_sub(elapsed_us).min(2_000)
-}
 pub fn nack_grace_ms(mode:u8,unrequested_age_us:u64,samples:u64)->u64{
     if mode!=2 || samples<16{return 12;}
     (unrequested_age_us.saturating_add(3_000).div_ceil(1000)).clamp(12,18)
@@ -121,6 +117,53 @@ pub fn nack_grace_ms(mode:u8,unrequested_age_us:u64,samples:u64)->u64{
 mod refinements{
     use super::*;
     #[test]fn audio_headroom(){assert_eq!(audio_start_ms(2,80),60);assert_eq!(audio_floor_ms(2,80),50);assert_eq!(audio_start_ms(0,80),80);assert_eq!(audio_next_target_ms(60,50,true,19),60);assert_eq!(audio_next_target_ms(60,50,true,20),55);assert_eq!(audio_next_target_ms(50,50,true,30),50);assert_eq!(audio_next_target_ms(60,50,false,30),60);}
-    #[test]fn pacing_bounds(){assert_eq!(pacing_guard_us(2,Some(60.0),9000,true),2000);assert_eq!(pacing_guard_us(2,Some(60.0),11500,true),500);assert_eq!(pacing_guard_us(2,Some(60.0),12000,true),0);assert_eq!(pacing_guard_us(0,Some(60.0),9000,true),0);assert_eq!(pacing_guard_us(2,Some(30.0),9000,true),0);assert_eq!(pacing_guard_us(2,Some(60.0),9000,false),0);}
+
     #[test]fn nack_bounds(){assert_eq!(nack_grace_ms(2,15000,15),12);assert_eq!(nack_grace_ms(0,15000,100),12);assert_eq!(nack_grace_ms(2,100,100),12);assert_eq!(nack_grace_ms(2,11100,100),15);assert_eq!(nack_grace_ms(2,100000,100),18);}
+}
+
+/// Very small rate correction only with excess queued audio. Preserve a
+/// generous deadband and never accelerate startup or an underrun recovery.
+pub fn audio_rate_trim_frames(mode:u8,started:bool,queued_ms:u32,target_ms:u32,frames:usize)->usize {
+    if mode!=2 || !started || queued_ms<target_ms.saturating_add(12) || frames<128{return 0;}
+    let percent=if queued_ms>=target_ms.saturating_add(25){2}else{1};
+    frames.saturating_mul(percent)/100
+}
+/// In-place stereo-preserving interpolation. Read positions never precede
+/// write positions. Keep both endpoints, no allocation and no packet deletion.
+pub fn shorten_stereo_pcm(samples:&mut Vec<i16>,trim_frames:usize)->usize{
+    let frames=samples.len()/2;
+    if samples.len()%2!=0 || frames<2 || trim_frames==0 || trim_frames>frames/50{return 0;}
+    let out=frames-trim_frames;
+    if out<2{return 0;}
+    let denom=(out-1) as i64;
+    for i in 0..out {
+        let pos=(i as i64)*(frames-1) as i64;
+        let j=(pos/denom) as usize;
+        let fraction=pos%denom;
+        let next=(j+1).min(frames-1);
+        for ch in 0..2 {
+            let a=i64::from(samples[j*2+ch]);let b=i64::from(samples[next*2+ch]);
+            samples[i*2+ch]=((a*(denom-fraction)+b*fraction)/denom) as i16;
+        }
+    }
+    samples.truncate(out*2);
+    trim_frames
+}
+#[cfg(test)]
+mod audio_trim_tests{
+    use super::*;
+    #[test]fn trim_is_bounded_and_uses_headroom(){
+        assert_eq!(audio_rate_trim_frames(2,true,71,60,960),0);
+        assert_eq!(audio_rate_trim_frames(2,true,72,60,960),9);
+        assert_eq!(audio_rate_trim_frames(2,true,85,60,960),19);
+        assert_eq!(audio_rate_trim_frames(2,false,100,60,960),0);
+        assert_eq!(audio_rate_trim_frames(0,true,100,60,960),0);
+    }
+    #[test]fn interpolation_preserves_stereo_and_endpoints(){
+        let mut s:Vec<i16>=(0..1000i16).flat_map(|i|[i,-i]).collect();
+        assert_eq!(shorten_stereo_pcm(&mut s,20),20);
+        assert_eq!(s.len(),1960);assert_eq!(&s[..2],&[0,0]);assert_eq!(&s[s.len()-2..],&[999,-999]);
+        assert!(s.chunks_exact(2).all(|p|p[0]==-p[1]));
+        assert_eq!(shorten_stereo_pcm(&mut s,100),0);
+    }
 }

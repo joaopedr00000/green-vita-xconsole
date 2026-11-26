@@ -202,6 +202,12 @@ impl AudioRenderer {
         loop {
             match self.samples_rx.try_recv() {
                 Ok(mut samples) => {
+                    let queued=self.queue.size().saturating_mul(1000)/AUDIO_BYTES_PER_SECOND;
+                    let trim=super::policy::audio_rate_trim_frames(crate::settings::latency_mode(),self.started,queued,self.prebuffer_ms,samples.len()/AUDIO_CHANNELS);
+                    if trim>0 {
+                        let removed=super::policy::shorten_stereo_pcm(&mut samples,trim);
+                        crate::streaming::video::metrics::AUDIO_TRIM_FRAMES.fetch_add(removed as u64,Ordering::Relaxed);
+                    }
                     let sample_bytes = (samples.len() * size_of::<i16>()) as u32;
                     if self.queue.size().saturating_add(sample_bytes) > pcm_queue_cap_bytes(self.prebuffer_ms) {
                         // Discard this *new* PCM packet, never abruptly clear already queued
@@ -248,6 +254,7 @@ impl AudioRenderer {
         self.low_water_ms=u32::MAX;self.last_arrival=None;self.arrival_gap_us=0;
         crate::streaming::video::metrics::AUDIO_QUEUED_MS.store(0,Ordering::Relaxed);
         crate::streaming::video::metrics::AUDIO_ARRIVAL_US.store(0,Ordering::Relaxed);
+        crate::streaming::video::metrics::AUDIO_TRIM_FRAMES.store(0,Ordering::Relaxed);
         self.last_underrun = Instant::now();
         self.last_adjustment = Instant::now();
         self.retire_decode_worker();

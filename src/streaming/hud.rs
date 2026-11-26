@@ -4,7 +4,7 @@ use std::time::{Duration,Instant};
 pub(crate) struct PlaybackMetrics {
     pub decoded:u64,pub presented:u64,pub rtp_avg_us:u64,pub rtp_max_us:u64,
     pub decode_us:u64,pub queue_age_us:u64,pub input_us:u64,pub display_us:u64,pub pipeline_us:u64,
-    pub audio_ms:u64,pub audio_queued_ms:u64,pub audio_arrival_us:u64,pub pacing_guards:u64,pub telemetry_missed:u64,pub underruns:u64,pub audio_drops:u64,pub skipped:u64,pub replaced:u64,
+    pub audio_ms:u64,pub audio_queued_ms:u64,pub audio_arrival_us:u64,pub audio_trim_frames:u64,pub telemetry_missed:u64,pub underruns:u64,pub audio_drops:u64,pub skipped:u64,pub replaced:u64,
     pub queue_full:u64,pub resyncs:u64,pub resets:u64,
     pub stages:Option<PresentedStages>,pub pipeline_avg_us:u64,pub pipeline_max_us:u64,pub stage_samples:u64,pub queue_depth:u64,pub stale_handoffs:u64,pub output_replacements:u64,pub catch_up_replacements:u64,pub frame_wakes:u64,pub idle_swaps_saved:u64,pub pipeline_p95_us:u64,pub gap_p95_us:u64,
 }

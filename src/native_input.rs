@@ -14,6 +14,11 @@ static STATE:Mutex<State>=Mutex::new(State {config:None,sample:None,edges:VecDeq
 static WAKE:Condvar=Condvar::new();
 pub(crate) static INPUT_CHANGED:tokio::sync::Notify=tokio::sync::Notify::const_new();
 static CHANGE_COUNT:AtomicU64=AtomicU64::new(0);
+// 0 = no accepted normal input yet, 1 = RAW, 2 = SDL fallback.
+static LAST_SOURCE:AtomicU64=AtomicU64::new(0);
+static BUSY_READS:AtomicU64=AtomicU64::new(0);
+pub(crate) fn last_source()->u64{LAST_SOURCE.load(Ordering::Relaxed)}
+pub(crate) fn busy_reads()->u64{BUSY_READS.load(Ordering::Relaxed)}
 static CHANGE_SUM_US:AtomicU64=AtomicU64::new(0);
 static CHANGE_MAX_US:AtomicU64=AtomicU64::new(0);
 static CHANGE_LAST_US:AtomicU64=AtomicU64::new(0);
@@ -48,21 +53,25 @@ pub fn configure(config:Option<Config>) {
     }
     if config.is_some() { let _=STARTED.get_or_init(||std::thread::Builder::new().name("green-vita-input".into()).spawn(run).is_ok()); }
 }
-pub fn disable(){configure(None);}
+pub fn disable(){configure(None);LAST_SOURCE.store(0,Ordering::Relaxed);}
 /// Only suppress the redundant post-render SDL read while RAW is fresh;
 /// the ordinary SDL polling path and View/Back handling remain intact.
 pub(crate) fn fresh_for_redundant_read()->bool{!suppressed() && STATE.try_lock().ok().is_some_and(|s|s.sample.as_ref().is_some_and(|f|f.sampled_at.elapsed()<Duration::from_millis(8)))}
-pub fn latest()->Option<NativeSample>{
-    if suppressed(){return None;}
-    let mut s=STATE.try_lock().ok()?;
+pub(crate) fn try_latest()->Result<Option<NativeSample>,()>{
+    // A brief lock collision is not evidence that the handheld is unavailable.
+    let until=SUPPRESS_UNTIL.try_lock().map_err(|_|{BUSY_READS.fetch_add(1,Ordering::Relaxed);})?;
+    if until.is_some_and(|at|at>Instant::now()){return Ok(None);}
+    drop(until);
+    let mut s=STATE.try_lock().map_err(|_|{BUSY_READS.fetch_add(1,Ordering::Relaxed);})?;
     while s.edges.front().is_some_and(|e|e.sampled_at.elapsed()>=MAX_AGE) { s.edges.pop_front();EDGE_DROPS.fetch_add(1,Ordering::Relaxed); }
-    let latest=s.sample.as_ref().filter(|x|x.sampled_at.elapsed()<MAX_AGE)?;
-    Some(s.edges.front().unwrap_or(latest).clone())
+    let Some(latest)=s.sample.as_ref().filter(|x|x.sampled_at.elapsed()<MAX_AGE) else{return Ok(None);};
+    Ok(Some(s.edges.front().unwrap_or(latest).clone()))
 }
 pub fn acknowledge(edge:u64){
-    if let Ok(mut s)=STATE.try_lock(){ if s.edges.front().is_some_and(|e|e.edge==Some(edge)){s.edges.pop_front();} }
+    if let Ok(mut s)=STATE.lock(){ if s.edges.front().is_some_and(|e|e.edge==Some(edge)){s.edges.pop_front();} }
 }
 pub fn dispatch(native:bool,age_us:u64){
+    LAST_SOURCE.store(if native{1}else{2},Ordering::Relaxed);
     let (count,sum)=if native{(&NATIVE_SENT,&NATIVE_DELAY)}else{(&SDL_SENT,&SDL_DELAY)};
     count.fetch_add(1,Ordering::Relaxed);sum.fetch_add(age_us,Ordering::Relaxed);
 }
@@ -71,7 +80,7 @@ pub(crate) struct InputMetrics {pub polls:u64,pub repeat_percent:u64,pub interva
 pub(crate) fn metrics()->InputMetrics{
     let polls=POLLS.load(Ordering::Relaxed);let count=INTERVAL_COUNT.load(Ordering::Relaxed);
     let n=NATIVE_SENT.load(Ordering::Relaxed);let s=SDL_SENT.load(Ordering::Relaxed);
-    InputMetrics{polls,repeat_percent:REPEATS.load(Ordering::Relaxed).saturating_mul(100).checked_div(polls).unwrap_or(0),interval_us:INTERVAL_SUM.load(Ordering::Relaxed).checked_div(count).unwrap_or(0),max_interval_us:INTERVAL_MAX.load(Ordering::Relaxed),edge_drops:EDGE_DROPS.load(Ordering::Relaxed),native_count:n,sdl_count:s,native_avg_us:NATIVE_DELAY.load(Ordering::Relaxed).checked_div(n).unwrap_or(0),sdl_avg_us:SDL_DELAY.load(Ordering::Relaxed).checked_div(s).unwrap_or(0),native_active:STATE.try_lock().ok().is_some_and(|x|x.sample.as_ref().is_some_and(|s|s.sampled_at.elapsed()<MAX_AGE))}
+    InputMetrics{polls,repeat_percent:REPEATS.load(Ordering::Relaxed).saturating_mul(100).checked_div(polls).unwrap_or(0),interval_us:INTERVAL_SUM.load(Ordering::Relaxed).checked_div(count).unwrap_or(0),max_interval_us:INTERVAL_MAX.load(Ordering::Relaxed),edge_drops:EDGE_DROPS.load(Ordering::Relaxed),native_count:n,sdl_count:s,native_avg_us:NATIVE_DELAY.load(Ordering::Relaxed).checked_div(n).unwrap_or(0),sdl_avg_us:SDL_DELAY.load(Ordering::Relaxed).checked_div(s).unwrap_or(0),native_active:last_source()==1}
 }
 pub fn telemetry()->String{
     let polls=POLLS.load(Ordering::Relaxed);let repeats=REPEATS.load(Ordering::Relaxed);

@@ -278,13 +278,12 @@ async fn run_session<B: super::session::RtcSessionBackend>(
             let _ = session.close();
             return Ok(());
         }
-        let pulses = gamepad_pulses
-            .lock()
-            .map(|mut pulses| pulses.drain(..).collect::<Vec<_>>())
-            .unwrap_or_default();
-        let pulse_started = !pulses.is_empty();
-        for frame in pulses {
-            active_gamepad_pulse = Some((frame, Instant::now() + GAMEPAD_PULSE_DURATION));
+        // The previous loop kept only the last pulse. Preserve that
+        // behavior without allocating an intermediate Vec on the RTC thread.
+        let pulse=gamepad_pulses.lock().ok().and_then(|mut pulses|{let last=pulses.pop_back();pulses.clear();last});
+        let pulse_started=pulse.is_some();
+        if let Some(frame)=pulse{
+            active_gamepad_pulse=Some((frame,Instant::now()+GAMEPAD_PULSE_DURATION));
         }
 
         let mut latest = latest_gamepad
@@ -295,11 +294,17 @@ async fn run_session<B: super::session::RtcSessionBackend>(
         let mut native_source = false;
         let mut native_change_at=None;
         if !stopping.load(Ordering::Acquire) && active_gamepad_pulse.is_none() && latest.as_ref().is_none_or(|s| s.frame.view == 0.0) {
-            if let Some(sample) = crate::native_input::latest() {
-                native_source = true;
-                native_edge = sample.edge;
-                native_change_at=Some(sample.changed_at);
-                latest = Some(SampledGamepadFrame { frame:sample.frame, sampled_at:sample.sampled_at });
+            match crate::native_input::try_latest(){
+                Ok(Some(sample))=>{
+                    native_source=true;
+                    native_edge=sample.edge;
+                    native_change_at=Some(sample.changed_at);
+                    latest=Some(SampledGamepadFrame{frame:sample.frame,sampled_at:sample.sampled_at});
+                }
+                // Keep last accepted state for this pump only. Next pump
+                // retries RAW, or falls back to SDL if genuinely unavailable.
+                Err(()) if crate::native_input::last_source()==1 && last_input_sample.elapsed()<Duration::from_millis(8)=>{latest=None;}
+                _=>{}
             }
         }
         if let Some(sampled) = latest.as_ref() {

@@ -242,7 +242,11 @@ impl VideoReceiver {
     /// Real, bounded receiver-side RTCP NACK. The remote sender may ignore it,
     /// but this at least asks for missing packets rather than merely advertising
     /// NACK in the SDP. The peer type remains unchanged (Vita RTC compatibility).
-    fn expire_missing(&mut self,now:Instant){let before=self.missing_video_packets.len();self.missing_video_packets.retain(|(_,at,_)|now.saturating_duration_since(*at)<=NACK_EXPIRY);self.expired_missing=self.expired_missing.saturating_add((before-self.missing_video_packets.len()) as u64);}
+    fn expire_missing(&mut self,now:Instant){
+        // Insertions are chronological; remove()/retain() preserve order.
+        // Avoid scanning the entire tracker on every RTP packet or pump.
+        if self.missing_video_packets.first().is_none_or(|(_,at,_)|now.saturating_duration_since(*at)<=NACK_EXPIRY){return;}
+        let before=self.missing_video_packets.len();self.missing_video_packets.retain(|(_,at,_)|now.saturating_duration_since(*at)<=NACK_EXPIRY);self.expired_missing=self.expired_missing.saturating_add((before-self.missing_video_packets.len()) as u64);}
     fn nack_grace_ms(&self)->u64{if self.profile==StreamProfile::LowLatency || self.rtp.waiting_for_keyframe(){12}else{crate::streaming::policy::nack_grace_ms(crate::settings::latency_mode(),self.late_age_us,self.unrequested_samples)}}
     pub(crate) fn request_nack(&mut self, peer: &mut RTCPeerConnection, now: Instant) {
         self.expire_missing(now);

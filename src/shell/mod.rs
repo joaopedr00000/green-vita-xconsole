@@ -326,11 +326,6 @@ pub async fn run(mut app: App) -> Result<()> {
                 }
             }
         }
-        // Bound the small burst guard; do not busy-wait or alter display sync.
-        if live_pacing && reuse {
-            let us=crate::streaming::policy::pacing_guard_us(mode,source_fps,last_present.elapsed().as_micros() as u64,audio_session_output.as_ref().is_some_and(|o|o.has_pending()));
-            if us>0{crate::streaming::video::metrics::PACING_GUARDS.fetch_add(1,std::sync::atomic::Ordering::Relaxed);sleep(Duration::from_micros(us)).await;}
-        }
         // Claim only at the final draw, never while the old texture is being used.
         let claimed=surface.sync_video_frame(app.state.streaming())?;
         if !live_pacing || !reuse || claimed{
