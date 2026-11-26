@@ -43,6 +43,7 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, hold_progress: Option<f32>) {
                     theme.text.gamma_multiply(0.75),
                     egui::RichText::new(&streaming.status).size(12.0),
                 );
+                ui.small(crate::native_input::telemetry());
                 ui.add_space(12.0);
             });
         }

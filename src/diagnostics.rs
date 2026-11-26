@@ -96,6 +96,7 @@ pub(crate) fn metrics(rx_kbps: u64, jitter_us: u64, gaps: u64, late: u64, drops:
         m.input_dispatch_us.load(Ordering::Relaxed), m.display_queue_us.load(Ordering::Relaxed),
         m.total_video_pipeline_us.load(Ordering::Relaxed), m.audio_target_ms.load(Ordering::Relaxed),
         m.audio_drops.load(Ordering::Relaxed)));
+    write_record("input_metrics", &crate::native_input::telemetry());
 }
 
 pub(crate) fn initialize() {

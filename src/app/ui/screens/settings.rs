@@ -20,6 +20,7 @@ pub enum Command {
     SetStreamProfile(StreamProfile),
     SetCloudRegion(Option<String>),
     SetNativeInput(bool),
+    CycleNativeDeadzone,
     CycleControl(usize),
     ResetControls,
 }
@@ -35,6 +36,7 @@ enum SettingsRow {
     StreamingProfile(StreamProfile),
     CloudRegion,
     NativeInput,
+    NativeDeadzone,
     Control(usize),
     ResetControls,
     Back,
@@ -85,6 +87,7 @@ fn settings_rows(app: &App) -> Vec<SettingsRow> {
         app.settings.show_stream_debug_info,
     ));
     rows.push(SettingsRow::NativeInput);
+    rows.push(SettingsRow::NativeDeadzone);
     rows.extend((0..16).map(SettingsRow::Control));
     rows.push(SettingsRow::ResetControls);
     rows.push(SettingsRow::Back);
@@ -297,6 +300,10 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
                     commands.push(Command::SetNativeInput(!app.settings.native_input_worker).into());
                 }
                 row_index += 1;
+                if focus_row(ui, selected_index == row_index, format!("{}: {}% >", if pt { "Zona morta (nativa)" } else { "Native stick deadzone" },app.settings.native_deadzone_percent)) {
+                    commands.push(Command::CycleNativeDeadzone.into());
+                }
+                row_index += 1;
                 let labels = crate::streaming::input::CONTROL_LABELS;
                 for index in 0..16 {
                     let target = labels.get(app.settings.control_map[index] as usize).unwrap_or(&"Disabled");
@@ -499,6 +506,7 @@ impl App {
                 return self.handle_settings_command(Command::SetShowStreamDebugInfo(!enabled));
             }
             SettingsRow::NativeInput => return self.handle_settings_command(Command::SetNativeInput(!self.settings.native_input_worker)),
+            SettingsRow::NativeDeadzone => return self.handle_settings_command(Command::CycleNativeDeadzone),
             SettingsRow::Control(index) => return self.handle_settings_command(Command::CycleControl(*index)),
             SettingsRow::ResetControls => return self.handle_settings_command(Command::ResetControls),
             SettingsRow::Back => {}
@@ -592,12 +600,17 @@ impl App {
                 self.settings.native_input_worker = enabled;
                 self.settings.save();
             }
+            Command::CycleNativeDeadzone => {
+                self.settings.native_deadzone_percent = match self.settings.native_deadzone_percent { 0=>4,4=>8,8=>12,12=>20,_=>0 };
+                self.settings.save();
+            }
             Command::CycleControl(index) => {
                 if let Some(target) = self.settings.control_map.get_mut(index) { *target = ((*target as u16 + 1) % 17) as u8; }
                 self.settings.save();
             }
             Command::ResetControls => {
                 self.settings.control_map = crate::streaming::input::default_control_map();
+                self.settings.native_deadzone_percent = 0;
                 self.settings.save();
             }
             Command::SetShowStreamDebugInfo(enabled) => {

@@ -81,3 +81,31 @@ mod control_tests {
         assert_eq!((frame.a, frame.b, frame.x), (0.0, 1.0, 0.0));
     }
 }
+
+pub(crate) fn native_poll_ms(changed_recently: bool) -> u64 { if changed_recently { 2 } else { 4 } }
+pub(crate) fn native_axis(raw: u8, deadzone_percent: u8) -> f32 {
+    let value = ((raw as f32 - 128.0) / if raw < 128 {128.0} else {127.0}).clamp(-1.0,1.0);
+    let dz = f32::from(deadzone_percent.min(20)) / 100.0;
+    if value.abs() <= dz { 0.0 } else { value.signum() * (value.abs()-dz) / (1.0-dz) }
+}
+impl GamepadFrame {
+    pub(crate) fn digital_mask(&self) -> u32 {
+        [self.a,self.b,self.x,self.y,self.dpad_up,self.dpad_down,self.dpad_left,self.dpad_right,self.left_shoulder,self.right_shoulder,self.left_trigger,self.right_trigger,self.left_thumb,self.right_thumb,self.menu,self.view].iter().enumerate().fold(0,|mask,(i,v)| mask | (u32::from(*v>0.5)<<i))
+    }
+}
+#[cfg(test)]
+mod native_tests {
+    use super::*;
+    #[test] fn native_axis_keeps_full_range() {
+        for dz in [0,4,8,12,20,255] { assert_eq!(native_axis(128,dz),0.0); assert_eq!(native_axis(0,dz),-1.0); assert_eq!(native_axis(255,dz),1.0); }
+        assert_eq!(native_axis(130,4),0.0);
+        assert!(native_axis(150,8)>0.0);
+        assert!(native_axis(150,8)<native_axis(150,0));
+    }
+    #[test] fn mask_ignores_stick_noise_and_preserves_remapped_button() {
+        let mut f=GamepadFrame {a:1.0,..Default::default()};
+        let m=f.digital_mask(); f.left_thumb_x_axis=0.3; assert_eq!(m,f.digital_mask());
+        let mut map=default_control_map();map[0]=11;f.remap(&map);assert_eq!(f.digital_mask(),1<<11);
+    }
+    #[test] fn poll_bounds() { assert_eq!(native_poll_ms(true),2); assert_eq!(native_poll_ms(false),4); }
+}

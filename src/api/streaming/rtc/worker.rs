@@ -290,9 +290,13 @@ async fn run_session<B: super::session::RtcSessionBackend>(
             .lock()
             .ok()
             .and_then(|mut latest| latest.take());
-        if !stopping.load(Ordering::Acquire) && latest.as_ref().is_none_or(|s| s.frame.view == 0.0) {
-            if let Some((frame, sampled_at)) = crate::native_input::latest() {
-                latest = Some(SampledGamepadFrame { frame, sampled_at });
+        let mut native_edge = None;
+        let mut native_source = false;
+        if !stopping.load(Ordering::Acquire) && active_gamepad_pulse.is_none() && latest.as_ref().is_none_or(|s| s.frame.view == 0.0) {
+            if let Some(sample) = crate::native_input::latest() {
+                native_source = true;
+                native_edge = sample.edge;
+                latest = Some(SampledGamepadFrame { frame:sample.frame, sampled_at:sample.sampled_at });
             }
         }
         if let Some(sampled) = latest.as_ref() {
@@ -326,7 +330,11 @@ async fn run_session<B: super::session::RtcSessionBackend>(
             }
         } else if let Some(sampled) = latest {
             if sampled.sampled_at.elapsed() < Duration::from_millis(100) {
-                send_sampled_gamepad_frame(&mut session, sampled, &mut last_gamepad_sent, false);
+                let at=sampled.sampled_at;
+                if send_sampled_gamepad_frame(&mut session, sampled, &mut last_gamepad_sent, native_edge.is_some()) {
+                    crate::native_input::dispatch(native_source, at.elapsed().as_micros() as u64);
+                    if let Some(edge)=native_edge { crate::native_input::acknowledge(edge); }
+                }
             }
         }
         if !stale_released && active_gamepad_pulse.is_none() && last_input_sample.elapsed() >= Duration::from_millis(100) {
@@ -424,13 +432,13 @@ fn send_sampled_gamepad_frame<B: super::session::RtcSessionBackend>(
     sampled: SampledGamepadFrame,
     last_sent: &mut Option<(GamepadFrame, Instant)>,
     force: bool,
-) {
+) -> bool {
     let now = Instant::now();
     let unchanged_and_fresh = last_sent.as_ref().is_some_and(|(previous, sent_at)| {
         *previous == sampled.frame && now.duration_since(*sent_at) < GAMEPAD_REFRESH_INTERVAL
     });
     if !force && unchanged_and_fresh {
-        return;
+        return false;
     }
 
     if session
@@ -443,7 +451,8 @@ fn send_sampled_gamepad_frame<B: super::session::RtcSessionBackend>(
             .store(now.saturating_duration_since(sampled.sampled_at).as_micros() as u64,
                 std::sync::atomic::Ordering::Relaxed);
         *last_sent = Some((sampled.frame, now));
-    }
+        true
+    } else { false }
 }
 
 fn drain_commands<B: super::session::RtcSessionBackend>(

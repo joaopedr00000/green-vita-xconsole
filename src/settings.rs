@@ -151,6 +151,7 @@ pub struct Settings {
     pub game_profiles: HashMap<String, GameProfile>,
     pub control_map: [u8; 16],
     pub native_input_worker: bool,
+    pub native_deadzone_percent: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -184,6 +185,7 @@ impl Default for Settings {
             game_profiles: HashMap::new(),
             control_map: crate::streaming::input::default_control_map(),
             native_input_worker: false,
+            native_deadzone_percent: 0,
         }
     }
 }
@@ -220,6 +222,7 @@ impl Settings {
             if let Ok(data) = std::fs::read_to_string(path) {
                 if let Ok(mut settings) = serde_json::from_str::<Self>(&data) {
                     if settings.control_map.iter().any(|v| *v > 16) { settings.control_map = crate::streaming::input::default_control_map(); }
+                    settings.native_deadzone_percent = settings.native_deadzone_percent.min(20);
                     return settings;
                 }
             }

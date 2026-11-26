@@ -1,49 +1,109 @@
-//! Independent handheld-only physical/touch sampler. SDL stays on its owning thread.
-use crate::streaming::input::GamepadFrame;
-use std::sync::{Mutex, OnceLock};
+//! Independent handheld-only sampler; SDL remains the compatibility path.
+use crate::streaming::input::{GamepadFrame,native_poll_ms};
+use std::collections::VecDeque;
+use std::sync::{Mutex, OnceLock, Condvar};
+use std::sync::atomic::{AtomicU64,Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct Config { pub rear: bool, pub front: bool, pub swap: bool, pub map: [u8; 16] }
-struct State { config: Option<Config>, sample: Option<(GamepadFrame, Instant)>, generation: u64 }
-static STATE: Mutex<State> = Mutex::new(State { config: None, sample: None, generation: 0 });
-static STARTED: OnceLock<bool> = OnceLock::new();
-static SUPPRESS_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
-pub fn suppress_for(duration: Duration) { if let Ok(mut until) = SUPPRESS_UNTIL.lock() { *until = Some(Instant::now() + duration); } }
+pub struct Config { pub rear: bool, pub front: bool, pub swap: bool, pub map: [u8;16], pub deadzone_percent:u8 }
+#[derive(Clone)]
+pub struct NativeSample { pub frame:GamepadFrame, pub sampled_at:Instant, pub edge:Option<u64> }
+struct State { config:Option<Config>, sample:Option<NativeSample>, edges:VecDeque<NativeSample>, generation:u64, next_id:u64 }
+static STATE:Mutex<State>=Mutex::new(State {config:None,sample:None,edges:VecDeque::new(),generation:0,next_id:0});
+static WAKE:Condvar=Condvar::new();
+static STARTED:OnceLock<bool>=OnceLock::new();
+static SUPPRESS_UNTIL:Mutex<Option<Instant>>=Mutex::new(None);
+const EDGE_LIMIT:usize=8;
+const MAX_AGE:Duration=Duration::from_millis(100);
+static POLLS:AtomicU64=AtomicU64::new(0);
+static REPEATS:AtomicU64=AtomicU64::new(0);
+static INTERVAL_SUM:AtomicU64=AtomicU64::new(0);
+static INTERVAL_COUNT:AtomicU64=AtomicU64::new(0);
+static INTERVAL_MAX:AtomicU64=AtomicU64::new(0);
+static EDGE_DROPS:AtomicU64=AtomicU64::new(0);
+static NATIVE_SENT:AtomicU64=AtomicU64::new(0);
+static SDL_SENT:AtomicU64=AtomicU64::new(0);
+static NATIVE_DELAY:AtomicU64=AtomicU64::new(0);
+static SDL_DELAY:AtomicU64=AtomicU64::new(0);
+#[derive(Default)]
+struct HardwareCache { ports_at:Option<Instant>,handheld:bool,panel:[Option<(i32,i32)>;2] }
 
-pub fn configure(config: Option<Config>) {
-    if let Ok(mut s) = STATE.lock() {
-        if s.config != config {
-            s.config = config; s.sample = None; s.generation = s.generation.wrapping_add(1);
-        }
-    }
-    if config.is_some() {
-        let _ = STARTED.get_or_init(|| std::thread::Builder::new()
-            .name("green-vita-input".into()).spawn(run).is_ok());
-    }
+pub fn suppress_for(duration:Duration) {
+    if let Ok(mut until)=SUPPRESS_UNTIL.lock() { *until=Some(Instant::now()+duration); }
+    if let Ok(mut s)=STATE.lock() { s.edges.clear(); s.sample=None; s.generation=s.generation.wrapping_add(1); }
+    WAKE.notify_one();
 }
-pub fn disable() { configure(None); }
-pub fn latest() -> Option<(GamepadFrame, Instant)> {
-    if SUPPRESS_UNTIL.try_lock().ok()?.is_some_and(|until| until > Instant::now()) { return None; }
-    let s = STATE.try_lock().ok()?;
-    s.sample.as_ref().filter(|(_, at)| at.elapsed() < Duration::from_millis(100)).cloned()
+fn suppressed()->bool { SUPPRESS_UNTIL.try_lock().map_or(true,|until|until.is_some_and(|at|at>Instant::now())) }
+pub fn configure(config:Option<Config>) {
+    if let Ok(mut s)=STATE.lock() {
+        if s.config!=config { s.config=config;s.sample=None;s.edges.clear();s.generation=s.generation.wrapping_add(1);WAKE.notify_one(); }
+    }
+    if config.is_some() { let _=STARTED.get_or_init(||std::thread::Builder::new().name("green-vita-input".into()).spawn(run).is_ok()); }
 }
-fn run() {
+pub fn disable(){configure(None);}
+pub fn latest()->Option<NativeSample>{
+    if suppressed(){return None;}
+    let mut s=STATE.try_lock().ok()?;
+    while s.edges.front().is_some_and(|e|e.sampled_at.elapsed()>=MAX_AGE) { s.edges.pop_front();EDGE_DROPS.fetch_add(1,Ordering::Relaxed); }
+    let latest=s.sample.as_ref().filter(|x|x.sampled_at.elapsed()<MAX_AGE)?;
+    Some(s.edges.front().unwrap_or(latest).clone())
+}
+pub fn acknowledge(edge:u64){
+    if let Ok(mut s)=STATE.try_lock(){ if s.edges.front().is_some_and(|e|e.edge==Some(edge)){s.edges.pop_front();} }
+}
+pub fn dispatch(native:bool,age_us:u64){
+    let (count,sum)=if native{(&NATIVE_SENT,&NATIVE_DELAY)}else{(&SDL_SENT,&SDL_DELAY)};
+    count.fetch_add(1,Ordering::Relaxed);sum.fetch_add(age_us,Ordering::Relaxed);
+}
+pub fn telemetry()->String{
+    let polls=POLLS.load(Ordering::Relaxed);let repeats=REPEATS.load(Ordering::Relaxed);
+    let count=INTERVAL_COUNT.load(Ordering::Relaxed);
+    let n=NATIVE_SENT.load(Ordering::Relaxed);let s=SDL_SENT.load(Ordering::Relaxed);
+    format!("native polls:{} repeat:{}% interval:{}/{}us edge_drop:{} dispatch N:{}us/{} S:{}us/{}",polls,repeats.saturating_mul(100).checked_div(polls).unwrap_or(0),INTERVAL_SUM.load(Ordering::Relaxed).checked_div(count).unwrap_or(0),INTERVAL_MAX.load(Ordering::Relaxed),EDGE_DROPS.load(Ordering::Relaxed),NATIVE_DELAY.load(Ordering::Relaxed).checked_div(n).unwrap_or(0),n,SDL_DELAY.load(Ordering::Relaxed).checked_div(s).unwrap_or(0),s)
+}
+fn run(){
+    let mut cache=HardwareCache::default();let mut generation_seen=u64::MAX;
+    let mut previous_poll:Option<Instant>=None;let mut previous_timestamp=None;
+    let mut fast_until=Instant::now();
     loop {
-        let started = Instant::now();
-        let (config, generation) = STATE.lock().map(|s| (s.config,s.generation)).unwrap_or((None,0));
-        if let Some(config) = config {
-            let sample = sample_hardware(config).map(|frame| (frame, Instant::now()));
-            if let Ok(mut s) = STATE.lock() {
-                if s.generation == generation { s.sample = sample; }
+        let Ok(mut s)=STATE.lock() else{return;};
+        while s.config.is_none(){let Ok(waited)=WAKE.wait(s) else{return;};s=waited;}
+        let config=s.config.expect("active config");let generation=s.generation;drop(s);
+        if generation_seen!=generation {cache=HardwareCache::default();previous_poll=None;previous_timestamp=None;generation_seen=generation;fast_until=Instant::now();}
+        let started=Instant::now();
+        if let Some(old)=previous_poll {let us=started.saturating_duration_since(old).as_micros() as u64;INTERVAL_SUM.fetch_add(us,Ordering::Relaxed);INTERVAL_COUNT.fetch_add(1,Ordering::Relaxed);INTERVAL_MAX.fetch_max(us,Ordering::Relaxed);}
+        previous_poll=Some(started);
+        let reading=sample_hardware(config,&mut cache);
+        if let Ok(mut s)=STATE.lock(){
+            if s.generation==generation{
+                match reading {
+                    Some((frame,stamp))=>{
+                        let sampled_at=Instant::now();
+                        POLLS.fetch_add(1,Ordering::Relaxed);
+                        if previous_timestamp==Some(stamp){REPEATS.fetch_add(1,Ordering::Relaxed);}
+                        previous_timestamp=Some(stamp);
+                        let changed=s.sample.as_ref().is_some_and(|old|old.frame!=frame);
+                        let edge=s.sample.as_ref().is_some_and(|old|old.frame.digital_mask()!=frame.digital_mask());
+                        if changed{fast_until=sampled_at+Duration::from_millis(100);}
+                        let sample=NativeSample{frame,sampled_at,edge:None};
+                        if edge && !suppressed(){
+                            if s.edges.len()>=EDGE_LIMIT{EDGE_DROPS.fetch_add(s.edges.len() as u64,Ordering::Relaxed);s.edges.clear();}
+                            s.next_id=s.next_id.wrapping_add(1);
+                            let mut e=sample.clone();e.edge=Some(s.next_id);s.edges.push_back(e);
+                        }
+                        s.sample=Some(sample);
+                    },
+                    None=>{s.sample=None;s.edges.clear();previous_timestamp=None;}
+                }
             }
         }
-        let period = if config.is_some() { Duration::from_millis(4) } else { Duration::from_millis(100) };
-        std::thread::sleep(period.saturating_sub(started.elapsed()));
+        let period=Duration::from_millis(native_poll_ms(Instant::now()<fast_until));
+        if let Ok(s)=STATE.lock(){if s.generation==generation{let _guard=WAKE.wait_timeout(s,period.saturating_sub(started.elapsed()));}}
     }
 }
 #[cfg(not(target_os="vita"))]
-fn sample_hardware(_: Config) -> Option<GamepadFrame> { None }
+fn sample_hardware(_:Config,_:&mut HardwareCache)->Option<(GamepadFrame,u64)>{None}
 
 #[cfg(target_os="vita")]
 mod vita {
@@ -74,15 +134,20 @@ mod vita {
     const _: () = assert!(std::mem::size_of::<Panel>() == 48);
 }
 #[cfg(target_os="vita")]
-fn sample_hardware(config: Config) -> Option<GamepadFrame> {
+fn sample_hardware(config: Config, cache: &mut HardwareCache) -> Option<(GamepadFrame,u64)> {
     use vita::*;
-    let mut ports = [0u8;16];
-    // Keep the SDL path for PS TV and paired external controllers.
-    if unsafe { sceCtrlGetControllerPortInfo(&mut ports) } < 0 || ports[0] != 1 || ports[1..5].iter().any(|p| *p != 0) { return None; }
+    // Recheck external controllers at least every 100ms; a topology event also
+    // disables the sampler and clears its cache via the configuration generation.
+    if cache.ports_at.is_none_or(|at| at.elapsed() >= Duration::from_millis(100)) {
+        let mut ports = [0u8;16];
+        cache.handheld = unsafe { sceCtrlGetControllerPortInfo(&mut ports) } >= 0 && ports[0] == 1 && ports[1..5].iter().all(|p| *p == 0);
+        cache.ports_at = Some(Instant::now());
+    }
+    if !cache.handheld { return None; }
     let mut pad = Pad::default();
     if unsafe { sceCtrlPeekBufferPositive(0,&mut pad,1) } <= 0 || pad.buttons & 0x10000 != 0 { return None; }
     let b = |mask:u32| f32::from(pad.buttons & mask != 0);
-    let axis = |raw:u8| ((raw as f32 - 128.0) / if raw < 128 {128.0} else {127.0}).clamp(-1.0,1.0);
+    let axis = |raw:u8| crate::streaming::input::native_axis(raw,config.deadzone_percent);
     let mut f = GamepadFrame {
         a:b(0x4000), b:b(0x2000), x:b(0x8000), y:b(0x1000),
         dpad_up:b(0x10), dpad_down:b(0x40), dpad_left:b(0x80), dpad_right:b(0x20),
@@ -93,11 +158,14 @@ fn sample_hardware(config: Config) -> Option<GamepadFrame> {
     // View/Back hold and pointer gestures remain owned by the UI.
     for (port, enabled) in [(0,config.front),(1,config.rear)] {
         if !enabled { continue; }
-        let mut panel = Panel::default();
+        if cache.panel[port as usize].is_none() {
+            let mut panel = Panel::default();
+            if unsafe { sceTouchGetPanelInfo(port,&mut panel) } < 0 { return None; }
+            cache.panel[port as usize] = Some(((i32::from(panel.min_x)+i32::from(panel.max_x))/2,(i32::from(panel.min_y)+i32::from(panel.max_y))/2));
+        }
+        let (mid_x,mid_y) = cache.panel[port as usize]?;
         let mut touch = TouchData::default();
-        if unsafe { sceTouchGetPanelInfo(port,&mut panel) } < 0 || unsafe { sceTouchPeek(port,&mut touch,1) } <= 0 { continue; }
-        let mid_x = (i32::from(panel.min_x)+i32::from(panel.max_x))/2;
-        let mid_y = (i32::from(panel.min_y)+i32::from(panel.max_y))/2;
+        if unsafe { sceTouchPeek(port,&mut touch,1) } <= 0 { return None; }
         for t in touch.reports.iter().take((touch.count as usize).min(8)) {
             match (i32::from(t.x)<mid_x,i32::from(t.y)<mid_y) {
                 (true,true)=>f.left_trigger=1.0, (false,true)=>f.right_trigger=1.0,
@@ -110,5 +178,5 @@ fn sample_hardware(config: Config) -> Option<GamepadFrame> {
         std::mem::swap(&mut f.right_shoulder,&mut f.right_trigger);
     }
     f.remap(&config.map);
-    Some(f)
+    Some((f,pad.timestamp))
 }
