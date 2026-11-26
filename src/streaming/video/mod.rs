@@ -78,23 +78,26 @@ impl DirectVideoOutput {
         self.frame_displayed.notify_all();
     }
 
-    pub(crate) fn mark_displayed(&self, index: usize, generation: u64) -> bool {
-        let Ok(mut state) = self.state.lock() else { return false; };
-        if state.pending != Some((index, generation)) { return false; }
-        state.displayed = Some(index);
-        state.pending = None;
-        drop(state);
-        self.frame_displayed.notify_one();
-        true
+    pub(crate) fn mark_displayed(&self, index: usize, generation: u64) {
+        let mut cleared_pending = false;
+        if let Ok(mut state) = self.state.lock() {
+            state.displayed = Some(index);
+            if state.pending == Some((index, generation)) {
+                state.pending = None;
+                cleared_pending = true;
+            }
+        }
+        if cleared_pending {
+            self.frame_displayed.notify_one();
+        }
     }
 
-    pub(super) fn lock_decode_target(&self, catch_up: bool) -> Option<DirectVideoTargetGuard<'_>> {
+    pub(super) fn lock_decode_target(&self) -> Option<DirectVideoTargetGuard<'_>> {
         let mut state = self.state.lock().ok()?;
         if state.pending.is_some() {
-            let wait = if catch_up && state.displayed.is_some() { Duration::from_millis(16) } else { MAX_PENDING_TEXTURE_WAIT };
             let (waited_state, _) = self
                 .frame_displayed
-                .wait_timeout_while(state, wait, |state| {
+                .wait_timeout_while(state, MAX_PENDING_TEXTURE_WAIT, |state| {
                     state.targets.is_some() && state.pending.is_some()
                 })
                 .ok()?;
@@ -120,11 +123,6 @@ pub(super) struct DirectVideoTargetGuard<'a> {
 }
 
 impl DirectVideoTargetGuard<'_> {
-    /// A failed hardware decode may have touched an unpresented texture.
-    /// Never let the renderer claim that stale generation after an error.
-    pub(super) fn invalidate(mut self) {
-        if self.state.pending.is_some_and(|(index, _)| index == self.index) { self.state.pending = None; }
-    }
     pub(super) fn publish(mut self) -> (usize, u64) {
         self.state.next_generation = self.state.next_generation.wrapping_add(1);
         let generation = self.state.next_generation;
