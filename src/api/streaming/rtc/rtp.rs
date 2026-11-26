@@ -56,7 +56,7 @@ impl AudioRtp {
         }
     }
 
-    pub(super) fn receive(&mut self, packet: Packet, audio_packets: &mut Vec<Bytes>) {
+    pub(super) fn receive(&mut self, packet: Packet, audio_packets: &mut Vec<crate::streaming::audio::AudioPacket>) {
         if packet.header.payload_type != self.payload_type {
             return;
         }
@@ -66,7 +66,7 @@ impl AudioRtp {
             let Some(sample) = self.samples.pop() else {
                 break;
             };
-            audio_packets.push(sample.data);
+            audio_packets.push(crate::streaming::audio::AudioPacket{data:sample.data,timestamp:sample.packet_timestamp,missing:sample.prev_dropped_packets.saturating_sub(sample.prev_padding_packets),assembled_at:Instant::now()});
         }
     }
 }

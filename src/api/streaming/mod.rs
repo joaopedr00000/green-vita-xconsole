@@ -7,7 +7,6 @@ use crate::api_xbox::streaming::backend::XboxStreamingBackend;
 use crate::streaming::input::{GamepadFrame, PointerEvent};
 use crate::streaming::video::{DecodedFrame, DirectVideoOutput};
 use anyhow::Result;
-use bytes::Bytes;
 use std::sync::Arc;
 
 pub(crate) enum PlaybackBackendEvent {
@@ -34,11 +33,7 @@ impl PlaybackBackend {
         }
     }
 
-    pub(crate) fn try_recv_audio_packets(&self) -> Option<Vec<Bytes>> {
-        match self {
-            Self::Xbox(backend) => backend.try_recv_audio_packets(),
-        }
-    }
+    pub(crate) fn audio_receiver(&self)->crossbeam_channel::Receiver<crate::streaming::audio::AudioPacket>{match self{Self::Xbox(backend)=>backend.audio_receiver()}}
 
     pub(crate) fn take_latest_frame(&self) -> Option<(u64, DecodedFrame)> {
         match self {

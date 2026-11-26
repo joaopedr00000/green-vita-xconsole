@@ -14,6 +14,9 @@ pub(crate) static AUDIO_QUEUED_MS:AtomicU64=AtomicU64::new(0);
 pub(crate) static AUDIO_ARRIVAL_US:AtomicU64=AtomicU64::new(0);
 pub(crate) static AUDIO_TRIM_FRAMES:AtomicU64=AtomicU64::new(0);
 pub(crate) static AUDIO_REFILLS:AtomicU64=AtomicU64::new(0);
+pub(crate) static AUDIO_PLC_FRAMES:AtomicU64=AtomicU64::new(0);
+pub(crate) static AUDIO_HANDOFF_DROPS:AtomicU64=AtomicU64::new(0);
+pub(crate) static AUDIO_HANDOFF_MAX_US:AtomicU64=AtomicU64::new(0);
 pub(crate) static AUDIO_DEVICE_PERIOD_US:AtomicU64=AtomicU64::new(0);
 pub(crate) static TELEMETRY_MISSED:AtomicU64=AtomicU64::new(0);
 pub(crate) fn presented(stages:PresentedStages){if let Ok(mut s)=STAGES.try_lock(){s.last=Some(stages);s.sum=s.sum.saturating_add(stages.total_us);s.max=s.max.max(stages.total_us);s.count+=1;if s.totals.len()<256{s.totals.push(stages.total_us);}if stages.present_gap_us>0 && s.gaps.len()<256{s.gaps.push(stages.present_gap_us);}}else{TELEMETRY_MISSED.fetch_add(1,Ordering::Relaxed);}}

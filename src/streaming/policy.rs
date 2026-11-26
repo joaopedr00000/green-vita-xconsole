@@ -179,3 +179,24 @@ mod audio_refill_tests{
 /// Find a target not owned by the renderer or the pending picture.
 pub fn free_texture(count:usize,displayed:Option<usize>,pending:Option<usize>)->Option<usize>{(0..count).find(|i|Some(*i)!=displayed && Some(*i)!=pending)}
 #[cfg(test)]mod triple_tests{use super::*;#[test]fn independent_targets(){assert_eq!(free_texture(3,Some(0),Some(1)),Some(2));assert_eq!(free_texture(2,Some(0),Some(1)),None);assert_eq!(free_texture(2,Some(0),None),Some(1));}}
+
+pub fn valid_plc_duration(frames:usize)->bool{matches!(frames,120|240|480|960|1920|2880)}
+pub fn plc_packet_count(previous:u32,current:u32,frames:usize,missing:u16)->usize{
+    if missing==0 || !valid_plc_duration(frames){return 0;}
+    let delta=current.wrapping_sub(previous) as usize;
+    if delta<=frames || delta>frames*3 || delta%frames!=0{return 0;}
+    (delta/frames-1).min(missing as usize)
+}
+/// Peak-limited optional gain; no clipping and no change at 100%.
+pub fn apply_audio_gain(pcm:&mut [i16],percent:u32){
+    let percent=percent.clamp(100,150);
+    if percent==100{return;}
+    let peak=pcm.iter().map(|s|i32::from(*s).unsigned_abs()).max().unwrap_or(0).max(1);
+    let gain=(percent*256/100).min(32767*256/peak);
+    for s in pcm{*s=(i32::from(*s)*gain as i32/256).clamp(-32768,32767) as i16;}
+}
+#[cfg(test)]mod direct_audio_tests{
+    use super::*;
+    #[test]fn plc_only_confirmed_short_loss(){assert_eq!(plc_packet_count(1000,2920,960,1),1);assert_eq!(plc_packet_count(1000,3880,960,2),2);assert_eq!(plc_packet_count(1000,3880,960,0),0);assert_eq!(plc_packet_count(1000,12000,960,5),0);assert_eq!(plc_packet_count(u32::MAX-959,960,960,1),1);assert_eq!(plc_packet_count(1000,2000,441,2),0);}
+    #[test]fn gain_peak_safe(){let mut s=[1000,-1000,30000,-32768];apply_audio_gain(&mut s,150);assert!(s[2]<=30000);assert!(s[3]>=-32768);let mut quiet=[1000,-1000];apply_audio_gain(&mut quiet,150);assert_eq!(quiet,[1500,-1500]);}
+}

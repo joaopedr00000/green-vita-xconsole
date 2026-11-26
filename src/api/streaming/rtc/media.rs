@@ -3,7 +3,6 @@ use crate::api::streaming::rtc::bitrate::{AdaptiveBitrate, remember_healthy_rx};
 use crate::settings::{StreamProfile, active_stream_profile};
 use crate::streaming::video::{DecodedFrame, DecoderConfig, DirectVideoOutput, VideoDecodeWorker};
 use anyhow::Result;
-use bytes::Bytes;
 use rtc::media_stream::MediaStreamTrackId;
 use rtc::peer_connection::RTCPeerConnection;
 use rtc::rtp::Packet;
@@ -372,7 +371,7 @@ impl VideoReceiver {
 pub(crate) struct AudioReceiver {
     track_id: Option<MediaStreamTrackId>,
     rtp: rtp::AudioRtp,
-    pub(crate) packets: Vec<Bytes>,
+    pub(crate) packets: Vec<crate::streaming::audio::AudioPacket>,
 }
 
 impl AudioReceiver {

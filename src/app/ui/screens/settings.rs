@@ -96,7 +96,7 @@ fn settings_rows(app: &App) -> Vec<SettingsRow> {
     ));
     rows.push(SettingsRow::HudPage);
     rows.push(SettingsRow::HudOpacity);
-    rows.extend((0..3).map(SettingsRow::Lab));
+    rows.extend((0..4).map(SettingsRow::Lab));
     rows.push(SettingsRow::NativeDeadzone);
     rows.extend((0..16).map(SettingsRow::Control));
     rows.push(SettingsRow::ResetControls);
@@ -322,6 +322,7 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
                 let labels=if pt{["Três texturas de vídeo","Decoder interno Low Delay","Frequências de desempenho"]}else{["Triple video textures","Internal Low Delay decoder","Performance clocks"]};
                 let values=[app.settings.lab_triple_buffer,app.settings.lab_internal_decoder,app.settings.lab_performance_clocks];
                 for (i,label) in labels.into_iter().enumerate(){if checkbox_row(ui,selected_index==row_index,values[i],label.to_owned()){commands.push(Command::ToggleLab(i as u8).into());}row_index+=1;}
+                if focus_row(ui,selected_index==row_index,format!("{}: {}% >",if pt{"Ganho de áudio"}else{"Audio gain"},app.settings.lab_audio_gain_percent.clamp(100,150))){commands.push(Command::ToggleLab(3).into());}row_index+=1;
                 ui.small(if pt{"Reconecte após alterar o decoder ou as texturas. Frequências opcionais podem aumentar o consumo."}else{"Reconnect after decoder or texture changes. Optional clocks may increase power use."});
                 ui.separator();
                 ui.heading(if pt { "Mapeamento dos controles" } else { "Controller mapping" });
@@ -632,7 +633,7 @@ impl App {
                 self.settings.save();
             }
             Command::ToggleLab(i)=>{
-                match i{0=>self.settings.lab_triple_buffer=!self.settings.lab_triple_buffer,1=>self.settings.lab_internal_decoder=!self.settings.lab_internal_decoder,2=>self.settings.lab_performance_clocks=!self.settings.lab_performance_clocks,_=>{}}
+                match i{0=>self.settings.lab_triple_buffer=!self.settings.lab_triple_buffer,1=>self.settings.lab_internal_decoder=!self.settings.lab_internal_decoder,2=>self.settings.lab_performance_clocks=!self.settings.lab_performance_clocks,3=>self.settings.lab_audio_gain_percent=match self.settings.lab_audio_gain_percent{100=>125,125=>150,_=>100},_=>{}}
                 crate::experimental::configure(&self.settings);self.settings.save();
             }
             Command::CycleNativeDeadzone => {

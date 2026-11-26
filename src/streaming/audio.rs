@@ -1,12 +1,12 @@
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
-use sdl2::audio::{AudioQueue, AudioSpecDesired};
+use crossbeam_channel::{Receiver,Sender,bounded,unbounded,select_biased};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use crate::settings::{StreamProfile, active_stream_profile};
 use crate::streaming::video::metrics::METRICS;
 use std::ptr::NonNull;
-use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
+use std::thread::JoinHandle;
 
 pub const AUDIO_SAMPLE_RATE: i32 = 48_000;
 const AUDIO_CHANNELS: usize = 2;
@@ -21,8 +21,7 @@ fn baseline_ms() -> u32 {
     match active_stream_profile() { StreamProfile::LowLatency => 50, StreamProfile::Balanced => 60, StreamProfile::Quality => 80 }
 }
 const MAX_OPUS_FRAME_SAMPLES_PER_CHANNEL: usize = 5_760;
-const MAX_PENDING_OPUS_PACKETS: usize = 32;
-const MAX_PENDING_PCM_BUFFERS: usize = 8;
+
 
 const OPUS_OK: i32 = 0;
 
@@ -92,6 +91,13 @@ impl NativeOpusDecoder {
     }
 }
 
+impl NativeOpusDecoder{
+    fn conceal(&mut self,frames:usize,pcm:&mut [i16])->Result<usize>{
+        if !super::policy::valid_plc_duration(frames){bail!("invalid PLC duration");}
+        let n=unsafe{opus_decode(self.state.as_ptr(),std::ptr::null(),0,pcm.as_mut_ptr(),frames as i32,0)};
+        if n<0{bail!("Opus PLC error {n}");}Ok(n as usize)
+    }
+}
 impl Drop for NativeOpusDecoder {
     fn drop(&mut self) {
         // SAFETY: this is the sole owner and the state has not previously been destroyed.
@@ -99,247 +105,174 @@ impl Drop for NativeOpusDecoder {
     }
 }
 
-pub struct AudioRenderer {
-    queue: AudioQueue<i16>,
-    packets_tx: SyncSender<Bytes>,
-    samples_rx: Receiver<Vec<i16>>,
-    started: bool,
-    prebuffer_ms: u32,
-    last_underrun: Instant,
-    last_adjustment: Instant,
-    fade_next_packet: bool,
-    retry_worker_after: Instant,
-    worker_ready: bool,
-    low_water_ms:u32,
-    last_arrival:Option<Instant>,
-    arrival_gap_us:u64,
-    refill_period_bytes:u32,
-}
 
-impl AudioRenderer {
-    pub fn new(audio: &sdl2::AudioSubsystem) -> Result<Self> {
-        let desired = AudioSpecDesired {
-            freq: Some(AUDIO_SAMPLE_RATE),
-            channels: Some(AUDIO_CHANNELS as u8),
-            samples: Some(1024),
-        };
-        let queue = audio
-            .open_queue(None, &desired)
-            .map_err(anyhow::Error::msg)
-            .context("failed to open SDL audio queue")?;
-        let spec = queue.spec();
-        if spec.freq != AUDIO_SAMPLE_RATE || spec.channels != AUDIO_CHANNELS as u8 {
-            eprintln!(
-                "SDL audio opened as {} Hz / {} channel(s), requested {} Hz / {} channel(s)",
-                spec.freq, spec.channels, AUDIO_SAMPLE_RATE, AUDIO_CHANNELS
-            );
+/// A reassembled Xbox Opus packet. Retain RTP timing and actual loss
+/// evidence from SampleBuilder; never assume NVIDIA's 10 ms packet duration.
+pub(crate) struct AudioPacket{pub data:Bytes,pub timestamp:u32,pub missing:u16,pub assembled_at:Instant}
+
+/// Dedicated SDL device, owned exclusively by the audio worker after opening.
+/// SDL's queue API is thread-safe. Drop runs only after the worker stops.
+struct Device{id:sdl2::sys::SDL_AudioDeviceID,period_bytes:u32,period_us:u64}
+impl Device{
+    fn open()->Result<Self>{
+        use sdl2::sys::*;
+        let desired=SDL_AudioSpec{freq:AUDIO_SAMPLE_RATE,format:AUDIO_S16LSB as SDL_AudioFormat,channels:AUDIO_CHANNELS as u8,silence:0,samples:1024,padding:0,size:0,callback:None,userdata:std::ptr::null_mut()};
+        let mut obtained=desired;
+        let id=unsafe{SDL_OpenAudioDevice(std::ptr::null(),0,&desired,&mut obtained,0)};
+        if id==0{bail!("SDL could not open queued audio");}
+        if obtained.freq!=AUDIO_SAMPLE_RATE || obtained.channels!=AUDIO_CHANNELS as u8 || obtained.format!=desired.format{
+            unsafe{SDL_CloseAudioDevice(id);}bail!("unexpected SDL audio format");
         }
-        // Keep the negotiated device period unchanged. A refill of at least
-        // one period can continue playback without an avoidable pause.
-        let refill_period_bytes=u32::from(spec.samples.max(1))*AUDIO_CHANNELS as u32*2;
-        crate::streaming::video::metrics::AUDIO_DEVICE_PERIOD_US.store(u64::from(spec.samples)*1_000_000/(spec.freq.max(1) as u64),Ordering::Relaxed);
-        let (packets_tx, samples_rx) = spawn_decode_worker()?;
-
-        Ok(Self {
-            queue,
-            packets_tx,
-            samples_rx,
-            started: false,
-            prebuffer_ms:super::policy::audio_start_ms(crate::settings::latency_mode(),baseline_ms()),
-            last_underrun: Instant::now(),
-            last_adjustment: Instant::now(),
-            fade_next_packet: true,
-            retry_worker_after: Instant::now(),
-            worker_ready: true,
-            low_water_ms:u32::MAX,last_arrival:None,arrival_gap_us:0,refill_period_bytes,
-        })
+        let period_bytes=u32::from(obtained.samples.max(1))*AUDIO_CHANNELS as u32*2;
+        let period_us=u64::from(obtained.samples.max(1))*1_000_000/AUDIO_SAMPLE_RATE as u64;
+        crate::streaming::video::metrics::AUDIO_DEVICE_PERIOD_US.store(period_us,Ordering::Relaxed);
+        Ok(Self{id,period_bytes,period_us})
     }
+    fn size(&self)->u32{unsafe{sdl2::sys::SDL_GetQueuedAudioSize(self.id)}}
+    fn pause(&self,pause:bool){unsafe{sdl2::sys::SDL_PauseAudioDevice(self.id,i32::from(pause));}}
+    fn clear(&self){unsafe{sdl2::sys::SDL_ClearQueuedAudio(self.id);}}
+    fn queue(&self,s:&[i16])->bool{unsafe{sdl2::sys::SDL_QueueAudio(self.id,s.as_ptr().cast(),std::mem::size_of_val(s) as u32)==0}}
+}
+impl Drop for Device{fn drop(&mut self){self.pause(true);self.clear();unsafe{sdl2::sys::SDL_CloseAudioDevice(self.id);}}}
 
-    pub fn submit_packets(&mut self, packets: Vec<Bytes>) {
-        if !self.worker_ready {
-            if Instant::now() >= self.retry_worker_after { self.restart_decode_worker(); }
-            if !self.worker_ready { return; }
-        }
+enum Control{Bind(Receiver<AudioPacket>,Sender<()>),Clear(Sender<()>),Stop}
+pub struct AudioRenderer{_audio:sdl2::AudioSubsystem,control:Sender<Control>,worker:Option<JoinHandle<()>>}
+impl AudioRenderer{
+    pub fn new(audio:&sdl2::AudioSubsystem)->Result<Self>{
+        let device=Device::open()?;
+        let decoder=NativeOpusDecoder::new()?;
+        let (control,rx)=unbounded();
+        let worker=std::thread::Builder::new().name("green-vita-audio-direct".into()).spawn(move||run(device,decoder,rx)).context("spawn audio worker")?;
+        Ok(Self{_audio:audio.clone(),control,worker:Some(worker)})
+    }
+    pub fn bind_session(&mut self,source:Receiver<AudioPacket>){
+        let (tx,rx)=bounded(1);
+        if self.control.send(Control::Bind(source,tx)).is_ok() && rx.recv_timeout(Duration::from_millis(200)).is_err(){crate::diagnostics::step("lab_audio","BIND_TIMEOUT");}
+    }
+    pub fn clear_session(&mut self){
+        let (tx,rx)=bounded(1);
+        if self.control.send(Control::Clear(tx)).is_ok() && rx.recv_timeout(Duration::from_millis(200)).is_err(){crate::diagnostics::step("lab_audio","CLEAR_TIMEOUT");}
+    }
+}
+impl Drop for AudioRenderer{fn drop(&mut self){let _=self.control.send(Control::Stop);if let Some(worker)=self.worker.take(){let _=worker.join();}}}
+
+struct Playback{
+    device:Device,decoder:NativeOpusDecoder,pcm:Vec<i16>,started:bool,fade:bool,target:u32,
+    last_adjustment:Instant,last_underrun:Instant,empty_since:Option<Instant>,low_water:u32,
+    last_arrival:Option<Instant>,arrival_gap_us:u64,previous:Option<(u32,usize)>,
+}
+impl Playback{
+    fn new(device:Device,decoder:NativeOpusDecoder)->Self{
+        Self{device,decoder,pcm:vec![0;MAX_OPUS_FRAME_SAMPLES_PER_CHANNEL*AUDIO_CHANNELS],started:false,fade:true,
+            target:super::policy::audio_start_ms(crate::settings::latency_mode(),baseline_ms()),
+            last_adjustment:Instant::now(),last_underrun:Instant::now(),empty_since:None,low_water:u32::MAX,
+            last_arrival:None,arrival_gap_us:0,previous:None}
+    }
+    fn reset(&mut self){
+        self.device.pause(true);self.device.clear();self.started=false;self.fade=true;
+        self.target=super::policy::audio_start_ms(crate::settings::latency_mode(),baseline_ms());
+        self.last_adjustment=Instant::now();self.last_underrun=Instant::now();
+        self.empty_since=None;self.low_water=u32::MAX;self.last_arrival=None;self.arrival_gap_us=0;self.previous=None;
+        // A fresh decoder prevents codec state from crossing session boundaries.
+        if let Ok(d)=NativeOpusDecoder::new(){self.decoder=d;}else{crate::diagnostics::step("lab_audio","RESET_DECODER_FAILED");}
+        use crate::streaming::video::metrics::*;
+        for m in [&AUDIO_QUEUED_MS,&AUDIO_ARRIVAL_US,&AUDIO_TRIM_FRAMES,&AUDIO_REFILLS,&AUDIO_PLC_FRAMES,&AUDIO_HANDOFF_DROPS,&AUDIO_HANDOFF_MAX_US]{m.store(0,Ordering::Relaxed);}
+        METRICS.audio_target_ms.store(self.target as u64,Ordering::Relaxed);
+    }
+    fn packet(&mut self,packet:AudioPacket){
         let now=Instant::now();
-        let queued_bytes=self.queue.size();
-        let queued_ms=queued_bytes.saturating_mul(1000)/AUDIO_BYTES_PER_SECOND;
-        let was_started=self.started;
-        let empty_at_entry=was_started && queued_bytes==0;
-        let mut refilling=empty_at_entry;
-        if empty_at_entry{self.fade_next_packet=true;}
-        if self.started{self.low_water_ms=self.low_water_ms.min(queued_ms);}
-        if !packets.is_empty(){
-            if let Some(at)=self.last_arrival{let us=now.saturating_duration_since(at).as_micros().min(1_000_000) as u64;self.arrival_gap_us=(self.arrival_gap_us.saturating_mul(7)+us)/8;}
-            self.last_arrival=Some(now);
+        crate::streaming::video::metrics::AUDIO_HANDOFF_MAX_US.fetch_max(now.saturating_duration_since(packet.assembled_at).as_micros() as u64,Ordering::Relaxed);
+        if let Some(at)=self.last_arrival{let us=now.saturating_duration_since(at).as_micros().min(1_000_000) as u64;self.arrival_gap_us=(self.arrival_gap_us*7+us)/8;}
+        self.last_arrival=Some(now);
+        if self.started && self.device.size()==0 && self.empty_since.is_none(){self.empty_since=Some(now);self.fade=true;}
+        // PLC only on bounded, timestamp-confirmed losses. Never synthesize long
+        // silence gaps, wraparound anomalies or unconfirmed DTX intervals.
+        if let Some((ts,frames))=self.previous{
+            let count=super::policy::plc_packet_count(ts,packet.timestamp,frames,packet.missing);
+            for _ in 0..count{
+                self.pcm.resize(MAX_OPUS_FRAME_SAMPLES_PER_CHANNEL*AUDIO_CHANNELS,0);
+                if let Ok(n)=self.decoder.conceal(frames,&mut self.pcm){if n>0{
+                    self.pcm.truncate(n*AUDIO_CHANNELS);
+                    if self.queue_pcm(false){crate::streaming::video::metrics::AUDIO_PLC_FRAMES.fetch_add(n as u64,Ordering::Relaxed);}
+                }}
+            }
         }
-
-        for packet in packets {
-            match self.packets_tx.try_send(packet) {
-                Ok(()) => {},
-                Err(TrySendError::Full(_)) => {
-                    METRICS.audio_drops.fetch_add(1, Ordering::Relaxed);
-                    self.fade_next_packet = true;
-                }
-                Err(TrySendError::Disconnected(packet)) => {
-                    eprintln!("Audio decode worker stopped; restarting");
-                    self.restart_decode_worker();
-                    if self.worker_ready { let _ = self.packets_tx.try_send(packet); }
-                    else { break; }
+        self.pcm.resize(MAX_OPUS_FRAME_SAMPLES_PER_CHANNEL*AUDIO_CHANNELS,0);
+        match self.decoder.decode(&packet.data,&mut self.pcm){
+            Ok(n) if n>0=>{self.previous=Some((packet.timestamp,n));self.pcm.truncate(n*AUDIO_CHANNELS);self.queue_pcm(true);}
+            _=>{METRICS.audio_drops.fetch_add(1,Ordering::Relaxed);self.fade=true;self.previous=None;
+                if let Ok(d)=NativeOpusDecoder::new(){self.decoder=d;}
+            }
+        }
+    }
+    fn queue_pcm(&mut self,allow_trim:bool)->bool{
+        let q=self.device.size();
+        let queued_ms=q.saturating_mul(1000)/AUDIO_BYTES_PER_SECOND;
+        let trim=super::policy::audio_rate_trim_frames(crate::settings::latency_mode(),allow_trim&&self.started&&self.empty_since.is_none(),queued_ms,self.target,self.pcm.len()/AUDIO_CHANNELS);
+        let removed=if trim>0{super::policy::shorten_stereo_pcm(&mut self.pcm,trim)}else{0};
+        if q.saturating_add(std::mem::size_of_val(self.pcm.as_slice()) as u32)>pcm_queue_cap_bytes(self.target){
+            METRICS.audio_drops.fetch_add(1,Ordering::Relaxed);self.fade=true;return false;
+        }
+        let gain=crate::experimental::audio_gain_percent();
+        if gain>100{super::policy::apply_audio_gain(&mut self.pcm,gain);}
+        if self.fade{
+            let fade_frames=AUDIO_SAMPLE_RATE as usize/200;
+            for (i,sample) in self.pcm.iter_mut().take(fade_frames*AUDIO_CHANNELS).enumerate(){*sample=(i32::from(*sample)*(i/AUDIO_CHANNELS) as i32/fade_frames as i32) as i16;}
+            self.fade=false;
+        }
+        if !self.device.queue(&self.pcm){METRICS.audio_drops.fetch_add(1,Ordering::Relaxed);self.fade=true;return false;}
+        crate::streaming::video::metrics::AUDIO_TRIM_FRAMES.fetch_add(removed as u64,Ordering::Relaxed);
+        if !self.started && self.device.size()>=AUDIO_BYTES_PER_SECOND*self.target/1000{self.device.pause(false);self.started=true;self.empty_since=None;}
+        true
+    }
+    fn tick(&mut self){
+        let q=self.device.size();let ms=q.saturating_mul(1000)/AUDIO_BYTES_PER_SECOND;
+        if self.started{
+            self.low_water=self.low_water.min(ms);
+            if q==0 && self.empty_since.is_none(){self.empty_since=Some(Instant::now());self.fade=true;}
+            if let Some(at)=self.empty_since{
+                if q>=self.device.period_bytes{
+                    self.empty_since=None;
+                    crate::streaming::video::metrics::AUDIO_REFILLS.fetch_add(1,Ordering::Relaxed);
+                }else if at.elapsed()>=Duration::from_micros(self.device.period_us.clamp(20_000,40_000)){
+                    self.device.pause(true);self.started=false;self.empty_since=None;self.fade=true;
+                    self.target=(self.target+10).min(110);self.last_underrun=Instant::now();self.last_adjustment=Instant::now();self.low_water=u32::MAX;
+                    METRICS.audio_underruns.fetch_add(1,Ordering::Relaxed);
                 }
             }
         }
-
-        loop {
-            match self.samples_rx.try_recv() {
-                Ok(mut samples) => {
-                    let queued_bytes=self.queue.size();
-                    let queued=queued_bytes.saturating_mul(1000)/AUDIO_BYTES_PER_SECOND;
-                    // Test true emptiness in bytes, not rounded milliseconds.
-                    // Never speed up audio during a refill or startup iteration.
-                    if self.started && queued_bytes==0{refilling=true;self.fade_next_packet=true;}
-                    let trim=super::policy::audio_rate_trim_frames(crate::settings::latency_mode(),was_started && self.started && !refilling,queued,self.prebuffer_ms,samples.len()/AUDIO_CHANNELS);
-                    let removed=if trim>0{super::policy::shorten_stereo_pcm(&mut samples,trim)}else{0};
-                    let sample_bytes = (samples.len() * size_of::<i16>()) as u32;
-                    if self.queue.size().saturating_add(sample_bytes) > pcm_queue_cap_bytes(self.prebuffer_ms) {
-                        // Discard this *new* PCM packet, never abruptly clear already queued
-                        // samples. The buffer drains naturally toward the live stream.
-                        METRICS.audio_drops.fetch_add(1, Ordering::Relaxed);
-                        self.fade_next_packet = true;
-                        continue;
-                    }
-                    if self.fade_next_packet {
-                        // Fade in the next playable packet to hide the edge of a dropped one.
-                        let fade_samples = (AUDIO_SAMPLE_RATE as usize / 200) * AUDIO_CHANNELS;
-                        for (index, sample) in samples.iter_mut().take(fade_samples).enumerate() {
-                            // The two stereo channels receive the same gain for each frame.
-                            let gain = (index / AUDIO_CHANNELS) as f32 / (fade_samples / AUDIO_CHANNELS) as f32;
-                            *sample = (*sample as f32 * gain) as i16;
-                        }
-                        self.fade_next_packet = false;
-                    }
-                    if let Err(error) = self.queue.queue_audio(&samples) {
-                        let _ = error;
-                        METRICS.audio_drops.fetch_add(1,Ordering::Relaxed);
-                        crate::diagnostics::step("audio", "OUTPUT_QUEUE_FAILED");
-                        self.fade_next_packet = true;
-                        continue;
-                    }
-                    crate::streaming::video::metrics::AUDIO_TRIM_FRAMES.fetch_add(removed as u64,Ordering::Relaxed);
-                    if !self.started && self.queue.size() >= AUDIO_BYTES_PER_SECOND * self.prebuffer_ms / 1_000 {
-                        self.queue.resume();
-                        self.started = true;
-                    }
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    eprintln!("Audio decode worker output disconnected; restarting");
-                    self.restart_decode_worker();
-                    break;
-                }
-            }
+        if self.last_underrun.elapsed()>=Duration::from_secs(30)&&self.last_adjustment.elapsed()>=Duration::from_secs(30){
+            let floor=super::policy::audio_floor_ms(crate::settings::latency_mode(),baseline_ms());
+            self.target=super::policy::audio_next_target_ms(self.target,floor,self.started,self.low_water);
+            self.low_water=u32::MAX;self.last_adjustment=Instant::now();
         }
-        // An empty SDL software queue is not proof of a hardware underrun.
-        // Drain decoded PCM first. If one device period is available again,
-        // continue playback; only pause/rebuffer when the refill is insufficient.
-        let queued_after=self.queue.size();
-        if self.started && (refilling || queued_after==0){
-            self.low_water_ms=0;
-            if super::policy::audio_refill_sufficient(queued_after,self.refill_period_bytes){
-                crate::streaming::video::metrics::AUDIO_REFILLS.fetch_add(1,Ordering::Relaxed);
-            }else{
-                self.queue.pause();
-                self.started=false;
-                self.prebuffer_ms=(self.prebuffer_ms+10).min(110);
-                self.last_underrun=Instant::now();
-                self.last_adjustment=Instant::now();
-                self.low_water_ms=u32::MAX;
-                METRICS.audio_underruns.fetch_add(1,Ordering::Relaxed);
-                self.fade_next_packet=true;
-            }
-        }
-        if self.last_underrun.elapsed()>=Duration::from_secs(30) && self.last_adjustment.elapsed()>=Duration::from_secs(30){
-            let mode=crate::settings::latency_mode();
-            let floor=super::policy::audio_floor_ms(mode,baseline_ms());
-            self.prebuffer_ms=super::policy::audio_next_target_ms(self.prebuffer_ms,floor,self.started,self.low_water_ms);
-            self.low_water_ms=u32::MAX;
-            self.last_adjustment=Instant::now();
-        }
-        METRICS.audio_target_ms.store(self.prebuffer_ms as u64,Ordering::Relaxed);
-        crate::streaming::video::metrics::AUDIO_QUEUED_MS.store((self.queue.size() as u64)*1000/(AUDIO_BYTES_PER_SECOND as u64),Ordering::Relaxed);
+        METRICS.audio_target_ms.store(self.target as u64,Ordering::Relaxed);
+        crate::streaming::video::metrics::AUDIO_QUEUED_MS.store(ms as u64,Ordering::Relaxed);
         crate::streaming::video::metrics::AUDIO_ARRIVAL_US.store(self.arrival_gap_us,Ordering::Relaxed);
     }
-
-    pub fn clear_session(&mut self) {
-        self.prebuffer_ms=super::policy::audio_start_ms(crate::settings::latency_mode(),baseline_ms());
-        self.low_water_ms=u32::MAX;self.last_arrival=None;self.arrival_gap_us=0;
-        crate::streaming::video::metrics::AUDIO_QUEUED_MS.store(0,Ordering::Relaxed);
-        crate::streaming::video::metrics::AUDIO_ARRIVAL_US.store(0,Ordering::Relaxed);
-        crate::streaming::video::metrics::AUDIO_TRIM_FRAMES.store(0,Ordering::Relaxed);
-        crate::streaming::video::metrics::AUDIO_REFILLS.store(0,Ordering::Relaxed);
-        METRICS.audio_target_ms.store(self.prebuffer_ms as u64,Ordering::Relaxed);
-        self.last_underrun = Instant::now();
-        self.last_adjustment = Instant::now();
-        self.retire_decode_worker();
-        self.retry_worker_after = Instant::now();
-    }
-
-    fn retire_decode_worker(&mut self) {
-        // Disconnect both channels before creating another decoder: no previous
-        // session samples can enter the new SDL queue, even on spawn failure.
-        let (empty_tx, empty_rx) = sync_channel::<Bytes>(1);
-        let (pcm_tx, pcm_rx) = sync_channel::<Vec<i16>>(1);
-        drop(empty_rx); drop(pcm_tx);
-        self.packets_tx = empty_tx;
-        self.samples_rx = pcm_rx;
-        self.queue.pause(); self.queue.clear();
-        self.started = false; self.fade_next_packet = true;
-        self.worker_ready = false;
-    }
-
-    fn restart_decode_worker(&mut self) {
-        self.retire_decode_worker();
-        self.retry_worker_after = Instant::now() + Duration::from_secs(2);
-        match spawn_decode_worker() {
-            Ok((packets_tx, samples_rx)) => {
-                self.packets_tx = packets_tx;
-                self.samples_rx = samples_rx;
-                self.worker_ready = true;
-            }
-            Err(_) => crate::diagnostics::step("audio", "DECODER_RESTART_FAILED"),
-        }
-    }
 }
-
-fn spawn_decode_worker() -> Result<(SyncSender<Bytes>, Receiver<Vec<i16>>)> {
-    let (packets_tx, packets_rx) = sync_channel::<Bytes>(MAX_PENDING_OPUS_PACKETS);
-    let (samples_tx, samples_rx) = sync_channel::<Vec<i16>>(MAX_PENDING_PCM_BUFFERS);
-
-    let mut decoder = NativeOpusDecoder::new().context("failed to create Opus decoder")?;
-
-    std::thread::Builder::new()
-        .name("green-vita-audio-decode".to_owned())
-        .spawn(move || {
-            let mut decode_buf = vec![0i16; MAX_OPUS_FRAME_SAMPLES_PER_CHANNEL * AUDIO_CHANNELS];
-            while let Ok(packet) = packets_rx.recv() {
-                let samples_per_channel = match decoder.decode(&packet, &mut decode_buf) {
-                    Ok(samples_per_channel) => samples_per_channel,
-                    Err(error) => {
-                        METRICS.audio_drops.fetch_add(1,Ordering::Relaxed);
-                        eprintln!("Failed to decode Opus audio packet: {error}");
-                        continue;
-                    }
-                };
-
-                let sample_count = samples_per_channel * AUDIO_CHANNELS;
-                if samples_tx
-                    .send(decode_buf[..sample_count].to_vec())
-                    .is_err()
-                {
-                    break;
+fn run(device:Device,decoder:NativeOpusDecoder,control:Receiver<Control>){
+    crate::experimental::pin_audio();
+    let mut playback=Playback::new(device,decoder);
+    let mut source=crossbeam_channel::never::<AudioPacket>();
+    loop{
+        select_biased!{
+            recv(control)->command=>match command{
+                Ok(Control::Bind(next,ack))=>{
+                    playback.reset();
+                    // Discard only already stale packets from before the new binding.
+                    while next.try_recv().is_ok(){}
+                    source=next;let _=ack.send(());
                 }
-            }
-        })
-        .context("failed to spawn audio decode worker")?;
-
-    Ok((packets_tx, samples_rx))
+                Ok(Control::Clear(ack))=>{source=crossbeam_channel::never();playback.reset();let _=ack.send(());}
+                Ok(Control::Stop)|Err(_)=>break,
+            },
+            recv(source)->packet=>match packet{
+                Ok(packet)=>playback.packet(packet),
+                Err(_)=>{source=crossbeam_channel::never();playback.reset();}
+            },
+            default(Duration::from_millis(4))=>{}
+        }
+        playback.tick();
+    }
 }

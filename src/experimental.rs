@@ -1,8 +1,10 @@
 //! Independent experimental settings and best-effort Vita scheduling/power.
-use std::sync::atomic::{AtomicBool,Ordering};
+use std::sync::atomic::{AtomicBool,AtomicU32,Ordering};
+static AUDIO_GAIN:AtomicU32=AtomicU32::new(100);
+pub(crate) fn audio_gain_percent()->u32{AUDIO_GAIN.load(Ordering::Relaxed)}
 static TRIPLE:AtomicBool=AtomicBool::new(true);
 static INTERNAL:AtomicBool=AtomicBool::new(true);
-pub(crate) fn configure(s:&crate::settings::Settings){TRIPLE.store(s.lab_triple_buffer,Ordering::Relaxed);INTERNAL.store(s.lab_internal_decoder,Ordering::Relaxed);}
+pub(crate) fn configure(s:&crate::settings::Settings){TRIPLE.store(s.lab_triple_buffer,Ordering::Relaxed);INTERNAL.store(s.lab_internal_decoder,Ordering::Relaxed);AUDIO_GAIN.store(s.lab_audio_gain_percent.clamp(100,150),Ordering::Relaxed);}
 pub(crate) fn triple_enabled()->bool{TRIPLE.load(Ordering::Relaxed)}
 pub(crate) fn internal_enabled()->bool{INTERNAL.load(Ordering::Relaxed)}
 #[cfg(target_os="vita")]

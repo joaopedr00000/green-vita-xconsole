@@ -261,16 +261,13 @@ pub async fn run(mut app: App) -> Result<()> {
             (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a,b),
             (None,None) => true, _ => false,
         };
-        if !same { audio_renderer.clear_session(); overlay_cache=None; last_present=Instant::now(); surface.reset_benchmark(); }
+        if !same { if let Some(s)=app.state.streaming(){audio_renderer.bind_session(s.audio_receiver());}else{audio_renderer.clear_session();} overlay_cache=None; last_present=Instant::now(); surface.reset_benchmark(); }
         audio_session_output = output;
         let native_config = match &app.state {
             AppState::Streaming(s) if !s.paused => s.native_config(&app.settings),
             _ => None,
         };
         crate::native_input::configure(native_config);
-        if let Some(streaming) = app.state.streaming_mut() {
-            audio_renderer.submit_packets(streaming.take_audio_packets());
-        }
         surface.prepare_video_output(app.state.streaming())?;
 
         let cacheable=matches!(&app.state,AppState::Streaming(s) if !s.paused && s.hint_started_at.elapsed()>=Duration::from_secs(3))
