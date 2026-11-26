@@ -192,10 +192,12 @@ impl AudioRenderer {
         loop {
             match self.samples_rx.try_recv() {
                 Ok(mut samples) => {
-                    let queued=self.queue.size().saturating_mul(1000)/AUDIO_BYTES_PER_SECOND;
-                    // Never speed up audio during a refill or just after startup.
-                    if self.started && queued==0{refilling=true;self.fade_next_packet=true;}
-                    let trim=super::policy::audio_rate_trim_frames(crate::settings::latency_mode(),self.started && !refilling,queued,self.prebuffer_ms,samples.len()/AUDIO_CHANNELS);
+                    let queued_bytes=self.queue.size();
+                    let queued=queued_bytes.saturating_mul(1000)/AUDIO_BYTES_PER_SECOND;
+                    // Test true emptiness in bytes, not rounded milliseconds.
+                    // Never speed up audio during a refill or startup iteration.
+                    if self.started && queued_bytes==0{refilling=true;self.fade_next_packet=true;}
+                    let trim=super::policy::audio_rate_trim_frames(crate::settings::latency_mode(),was_started && self.started && !refilling,queued,self.prebuffer_ms,samples.len()/AUDIO_CHANNELS);
                     let removed=if trim>0{super::policy::shorten_stereo_pcm(&mut samples,trim)}else{0};
                     let sample_bytes = (samples.len() * size_of::<i16>()) as u32;
                     if self.queue.size().saturating_add(sample_bytes) > pcm_queue_cap_bytes(self.prebuffer_ms) {
