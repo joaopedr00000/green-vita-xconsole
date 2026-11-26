@@ -1,6 +1,6 @@
 use crate::app::StreamingSession;
 use crate::shell::egui_painter::SdlEguiPainter;
-use crate::streaming::video::{DirectVideoOutput, VideoTextureTarget};
+use crate::streaming::video::{DirectVideoOutput, VideoTextureTarget,VideoPixelFormat};
 use anyhow::{Context, Result};
 use sdl2::pixels::PixelFormatEnum;
 use sdl2::render::{Canvas, Texture};
@@ -113,30 +113,35 @@ impl VitaSurface {
 
         self.detach_direct_video_output();
         let (width, height) = (output.width, output.height);
-        let create_texture = || {
-            self.canvas
-                .create_texture_streaming(PixelFormatEnum::BGR565, width, height)
-                .map_err(anyhow::Error::msg)
-                .context("failed to create direct SDL BGR565 video texture")
-        };
-        let mut textures=vec![create_texture()?,create_texture()?];
-        if streaming_lab_triple(){
-            match create_texture(){Ok(t)=>textures.push(t),Err(_)=>crate::diagnostics::step("lab_texture","DOUBLE_FALLBACK")}
+        // YUV is an opt-in experiment: preserve BGR565 by default. Never
+        // register planar targets unless the renderer advertises support
+        // and the actual SDL lock supplies a tight, sufficiently large layout.
+        let advertised=self.canvas.info().texture_formats;
+        let mut formats=Vec::new();
+        if crate::experimental::yuv_enabled() && advertised.contains(&PixelFormatEnum::NV12){formats.push((PixelFormatEnum::NV12,VideoPixelFormat::Nv12));}
+        formats.push((PixelFormatEnum::BGR565,VideoPixelFormat::Bgr565));
+        if advertised.contains(&PixelFormatEnum::IYUV){formats.push((PixelFormatEnum::IYUV,VideoPixelFormat::Iyuv));}
+        let mut chosen=None;
+        for (pixel,format) in formats{
+            let mut textures=Vec::new();let mut targets=Vec::new();
+            let count=if streaming_lab_triple(){3}else{2};
+            for _ in 0..count{
+                let Ok(mut texture)=self.canvas.create_texture_streaming(pixel,width,height)else{break;};
+                let target=texture.with_lock(None,|pixels,pitch|{
+                    let valid=if format==VideoPixelFormat::Bgr565{pitch>=width as usize*2 && pixels.len()>=pitch*height as usize}
+                    else{width%2==0 && height%2==0 && pitch==width as usize && pixels.len()>=pitch*height as usize*3/2};
+                    valid.then_some(VideoTextureTarget{ptr:pixels.as_mut_ptr() as usize,pitch:pitch as u32,capacity:pixels.len().min(u32::MAX as usize) as u32,format})
+                });
+                match target{Ok(Some(t))=>{textures.push(texture);targets.push(t);},_=>{unsafe{texture.destroy();}break;}}
+            }
+            if textures.len()>=2{chosen=Some((textures,targets,format));break;}
+            // These candidate textures have never been submitted to the GPU.
+            for texture in textures{unsafe{texture.destroy();}}
         }
+        let (textures,targets,format)=chosen.context("no compatible SDL video texture layout")?;
+        if matches!(format,VideoPixelFormat::Nv12|VideoPixelFormat::Iyuv){unsafe{sdl2::sys::SDL_SetYUVConversionMode(sdl2::sys::SDL_YUV_CONVERSION_MODE::SDL_YUV_CONVERSION_BT709);}}
+        crate::experimental::record_texture(textures.len(),format);
         crate::diagnostics::step("lab_texture",if textures.len()==3{"TRIPLE"}else{"DOUBLE"});
-        let mut targets=vec![VideoTextureTarget{ptr:0,pitch:0,capacity:0};textures.len()];
-        for (index, texture) in textures.iter_mut().enumerate() {
-            texture
-                .with_lock(None, |pixels, pitch| {
-                    targets[index] = VideoTextureTarget {
-                        ptr: pixels.as_mut_ptr() as usize,
-                        pitch: pitch as u32,
-                        capacity: pixels.len().min(u32::MAX as usize) as u32,
-                    };
-                })
-                .map_err(anyhow::Error::msg)
-                .context("failed to lock direct SDL video texture")?;
-        }
         output.set_targets(targets);
         self.video_textures = Some(textures);
         self.displayed_video_texture = None;

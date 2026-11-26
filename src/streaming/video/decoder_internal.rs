@@ -570,7 +570,9 @@ mod vita {
 
                 let returned_pts =
                     ((picture.info.pts.upper as u64) << 32) | picture.info.pts.lower as u64;
-                if picture.frame.framePitch.checked_mul(2).and_then(|p|p.checked_mul(self.height)).is_none_or(|n|n>direct_target.capacity){bail!("invalid internal decoder output pitch");}
+                let pitch=picture.frame.framePitch;
+                let bytes=match format{VideoPixelFormat::Bgr565=>pitch.checked_mul(self.height).and_then(|n|n.checked_mul(2)),VideoPixelFormat::Rgba8888=>pitch.checked_mul(self.height).and_then(|n|n.checked_mul(4)),_=>{if pitch!=self.width{bail!("unexpected YUV output pitch");}pitch.checked_mul(self.height).and_then(|n|n.checked_mul(3)).map(|n|n/2)}};
+                if bytes.is_none_or(|n|n>direct_target.capacity){bail!("invalid internal decoder output pitch");}
                 Ok(Some(returned_pts))
             }
         }

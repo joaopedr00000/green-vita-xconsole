@@ -1,18 +1,17 @@
 //! Conservative 720p-only receiver bitrate feedback.
 //! Feedback is a request to the server, not evidence that Xbox changed its encoder.
 use std::time::{Duration, Instant};
-use std::sync::atomic::{AtomicU32, Ordering};
 use crate::settings::{StreamProfile, active_stream_profile};
 
 const MIN_BPS: u32 = 2_500_000;
 const MAX_BPS: u32 = 15_000_000;
 const START_BPS: u32 = 6_000_000;
-// Only aggregate bitrate from a healthy stream is retained in process memory.
-static LAST_HEALTHY_RX_BPS: AtomicU32 = AtomicU32::new(0);
-pub(crate) fn remember_healthy_rx(bps: u32) {
-    if (2_500_000..=16_000_000).contains(&bps) {
-        LAST_HEALTHY_RX_BPS.store(bps, Ordering::Relaxed);
-    }
+// A bounded starting hint, not a persistent bitrate ceiling. Only healthy
+// sustained observations are written, once at the end of a session.
+fn hint_path(profile:StreamProfile)->&'static str{match profile{StreamProfile::LowLatency=>"ux0:data/xcloud-rust/lab-link-low.txt",StreamProfile::Balanced=>"ux0:data/xcloud-rust/lab-link-balanced.txt",StreamProfile::Quality=>"ux0:data/xcloud-rust/lab-link-quality.txt"}}
+fn read_hint(profile:StreamProfile)->u32{
+    if cfg!(test){return 0;}
+    std::fs::read_to_string(hint_path(profile)).ok().and_then(|s|s.trim().parse::<u32>().ok()).unwrap_or(0)
 }
 const WINDOW: Duration = Duration::from_secs(3);
 const FEEDBACK_INTERVAL: Duration = Duration::from_secs(5);
@@ -27,6 +26,7 @@ pub(crate) struct AdaptiveBitrate {
     last_feedback: Option<Instant>,
     packets: u64,
     damaged_frames: u64,
+    healthy_window:[u32;5],healthy_count:usize,peak_healthy:u32,saved_hint:u32,
 }
 
 impl AdaptiveBitrate {
@@ -36,12 +36,8 @@ impl AdaptiveBitrate {
 
     fn with_profile(profile: StreamProfile) -> Self {
         let now = Instant::now();
-        let measured = LAST_HEALTHY_RX_BPS.load(Ordering::Relaxed);
-        let initial = if measured > 0 {
-            measured.saturating_add(500_000).max(profile.starting_bitrate())
-        } else {
-            profile.starting_bitrate()
-        };
+        let saved_hint=read_hint(profile);
+        let initial=crate::streaming::policy::bounded_link_hint(profile.starting_bitrate(),profile.bitrate_cap(),saved_hint);
         Self {
             target_bps: initial.clamp(MIN_BPS, profile.bitrate_cap()),
             profile,
@@ -49,10 +45,16 @@ impl AdaptiveBitrate {
             last_increase: now,
             last_feedback: None,
             packets: 0,
-            damaged_frames: 0,
+            damaged_frames: 0,healthy_window:[0;5],healthy_count:0,peak_healthy:0,saved_hint,
         }
     }
 
+    pub(crate) fn observe_link(&mut self,bps:u32,healthy:bool){
+        if !healthy || !(2_500_000..=16_000_000).contains(&bps){self.healthy_count=0;return;}
+        self.healthy_window.rotate_left(1);self.healthy_window[4]=bps;
+        self.healthy_count=(self.healthy_count+1).min(5);
+        if self.healthy_count==5{let avg=(self.healthy_window.iter().map(|v|*v as u64).sum::<u64>()/5) as u32;self.peak_healthy=self.peak_healthy.max(avg);}
+    }
     pub(crate) fn packet_received(&mut self) {
         self.packets = self.packets.saturating_add(1);
     }
@@ -101,6 +103,13 @@ impl AdaptiveBitrate {
     }
 }
 
+impl Drop for AdaptiveBitrate{
+    fn drop(&mut self){
+        if cfg!(test) || self.peak_healthy==0{return;}
+        let hint=crate::streaming::policy::bounded_link_hint(self.profile.starting_bitrate(),self.profile.bitrate_cap(),self.peak_healthy.saturating_add(500_000).max(self.saved_hint));
+        let _=std::fs::write(hint_path(self.profile),hint.to_string());
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -30,6 +30,7 @@ pub(crate) struct VideoTextureTarget {
     pub(crate) ptr: usize,
     pub(crate) pitch: u32,
     pub(crate) capacity: u32,
+    pub(crate) format:VideoPixelFormat,
 }
 
 struct DirectVideoOutputState {

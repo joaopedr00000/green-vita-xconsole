@@ -1,5 +1,5 @@
 use crate::api::streaming::rtc::rtp;
-use crate::api::streaming::rtc::bitrate::{AdaptiveBitrate, remember_healthy_rx};
+use crate::api::streaming::rtc::bitrate::AdaptiveBitrate;
 use crate::settings::{StreamProfile, active_stream_profile};
 use crate::streaming::video::{DecodedFrame, DecoderConfig, DirectVideoOutput, VideoDecodeWorker};
 use anyhow::Result;
@@ -53,7 +53,6 @@ pub(crate) struct VideoReceiver {
     jitter_us: u64,
     profile: StreamProfile,
     last_status_damage: (u64, u64),
-    clean_status_seconds: u32,
     cadence:crate::streaming::hud::SourceCadence,
 }
 
@@ -86,7 +85,6 @@ impl VideoReceiver {
             jitter_us: 0,
             profile: active_stream_profile(),
             last_status_damage: (0, 0),
-            clean_status_seconds: 0,
             cadence:Default::default(),
         })
     }
@@ -323,18 +321,8 @@ impl VideoReceiver {
         let rx_mbps = (self.stats.rx_payload_bytes as f64) * 8.0
             / elapsed / 1_000_000.0;
         self.stats.rx_payload_bytes = 0;
-        if self.stats.dropped == self.last_status_damage.0
-            && self.stats.decode_errors == self.last_status_damage.1
-            && self.missing_video_packets.is_empty()
-            && rx_mbps >= 2.5
-        {
-            self.clean_status_seconds = self.clean_status_seconds.saturating_add(1);
-            if self.clean_status_seconds >= 8 {
-                remember_healthy_rx((rx_mbps * 1_000_000.0) as u32);
-            }
-        } else {
-            self.clean_status_seconds = 0;
-        }
+        let healthy=self.stats.dropped==self.last_status_damage.0 && self.stats.decode_errors==self.last_status_damage.1 && self.missing_video_packets.is_empty() && !self.rtp.waiting_for_keyframe() && (0.5..=2.0).contains(&elapsed);
+        self.bitrate.observe_link((rx_mbps*1_000_000.0) as u32,healthy);
         self.last_status_damage = (self.stats.dropped, self.stats.decode_errors);
 
         // Observation only; keep the v0.3.1 receive/decode decisions unchanged.

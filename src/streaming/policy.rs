@@ -200,3 +200,7 @@ pub fn apply_audio_gain(pcm:&mut [i16],percent:u32){
     #[test]fn plc_only_confirmed_short_loss(){assert_eq!(plc_packet_count(1000,2920,960,1),1);assert_eq!(plc_packet_count(1000,3880,960,2),2);assert_eq!(plc_packet_count(1000,3880,960,0),0);assert_eq!(plc_packet_count(1000,12000,960,5),0);assert_eq!(plc_packet_count(u32::MAX-959,960,960,1),1);assert_eq!(plc_packet_count(1000,2000,441,2),0);}
     #[test]fn gain_peak_safe(){let mut s=[1000,-1000,30000,-32768];apply_audio_gain(&mut s,150);assert!(s[2]<=30000);assert!(s[3]>=-32768);let mut quiet=[1000,-1000];apply_audio_gain(&mut quiet,150);assert_eq!(quiet,[1500,-1500]);}
 }
+
+/// Warm-start hint limited to two Mbps over the ordinary startup rate.
+pub fn bounded_link_hint(start:u32,cap:u32,hint:u32)->u32{hint.max(start).min(start.saturating_add(2_000_000)).min(cap)}
+#[cfg(test)]mod hint_tests{use super::*;#[test]fn bounded(){assert_eq!(bounded_link_hint(6_000_000,15_000_000,0),6_000_000);assert_eq!(bounded_link_hint(6_000_000,15_000_000,u32::MAX),8_000_000);assert_eq!(bounded_link_hint(6_000_000,6_000_000,9_000_000),6_000_000);}}
