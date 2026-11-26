@@ -1,0 +1,72 @@
+name: Update GreenVita v0.3.3 Final with tested touch layout
+on:
+  push:
+    branches: [vita-v0.3.3-final]
+    paths: [.github/workflows/update-green-vita-v0.3.3-front-touch.yml]
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: green-vita-v033-release-touch-update
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TESTED_SHA: 8f3508fa7aebc55b4fe69f61aab64bb512831447
+      ORIGINAL_SHA: b7a671282bdf7cb3c0a501953443411b19794ab1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact tested source and CI
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/$GITHUB_REPOSITORY/actions/runs/45784978910 --jq .head_sha)" = "$TESTED_SHA"
+          test "$(gh api repos/$GITHUB_REPOSITORY/actions/runs/45784978910 --jq .conclusion)" = success
+          test "$(gh api repos/$GITHUB_REPOSITORY/actions/artifacts/15100587737 --jq .name)" = GreenVita-0.3.3-front-touch-test
+          test "$(gh api repos/$GITHUB_REPOSITORY/actions/artifacts/15100587737 --jq .expired)" = false
+          git diff --exit-code "$TESTED_SHA" "$GITHUB_SHA" -- . ':!README.md' ':!docs/releases/v0.3.3.md' ':!.github/workflows/update-green-vita-v0.3.3-front-touch.yml'
+          grep -q '^version = "0.3.3"$' Cargo.toml
+          test "$(gh api repos/$GITHUB_REPOSITORY/git/ref/tags/v0.3.3 --jq .object.sha)" = "$ORIGINAL_SHA"
+          test "$(gh api repos/$GITHUB_REPOSITORY/releases/tags/v0.3.3 --jq .id)" = 459107507
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 45784978910
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          name: GreenVita-0.3.3-front-touch-test
+          path: dist
+      - name: Verify package and prepare checksum
+        run: |
+          set -euo pipefail
+          test -s dist/green-vita.vpk
+          unzip -tq dist/green-vita.vpk
+          unzip -Z1 dist/green-vita.vpk | grep -Fx eboot.bin
+          cd dist
+          sha256sum green-vita.vpk > green-vita.vpk.sha256
+          cp green-vita.vpk green-vita-touch-update.vpk
+          cp green-vita.vpk.sha256 green-vita-touch-update.vpk.sha256
+      - name: Preserve previous release and stage new assets
+        run: |
+          set -euo pipefail
+          mkdir previous
+          gh release download v0.3.3 -p green-vita.vpk -p green-vita.vpk.sha256 -D previous
+          cd previous
+          sha256sum -c green-vita.vpk.sha256
+          cp green-vita.vpk green-vita-original.vpk
+          sha256sum green-vita-original.vpk > green-vita-original.vpk.sha256
+          cd ..
+          gh release upload v0.3.3 previous/green-vita-original.vpk previous/green-vita-original.vpk.sha256 dist/green-vita-touch-update.vpk dist/green-vita-touch-update.vpk.sha256
+      - name: Update existing release and source tag
+        run: |
+          set -euo pipefail
+          # Retain old source in the original branch, then advance the tag
+          # with a lease so concurrent updates cannot be overwritten.
+          git push origin "$GITHUB_SHA:refs/tags/v0.3.3" --force-with-lease="refs/tags/v0.3.3:$ORIGINAL_SHA"
+          gh release upload v0.3.3 dist/green-vita.vpk dist/green-vita.vpk.sha256 --clobber
+          gh release edit v0.3.3 --notes-file docs/releases/v0.3.3.md --latest
+          gh release delete-asset v0.3.3 green-vita-touch-update.vpk --yes
+          gh release delete-asset v0.3.3 green-vita-touch-update.vpk.sha256 --yes
+          gh release view v0.3.3 --json url,isDraft,isPrerelease,assets

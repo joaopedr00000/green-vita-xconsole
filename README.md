@@ -45,6 +45,8 @@ The original source project is [Day-OS/green-vita](https://github.com/Day-OS/gre
 
 ## 0.3.3 Final — Extreme latency update
 
+**Front touch update:** the fourth per-game setting moves L3/R3 to the lower half of the front touchscreen, leaving the lower rear panel free. Upper rear mapping remains configurable. The original 0.3.3 package is preserved as a rollback asset in the same release. No version bump or streaming pipeline changes.
+
 Universal Extreme synchronization, direct frame-ready presentation, automatic Gamepad RAW, adaptive audio refill and a six-page diagnostic HUD with a 60-second benchmark. Physical Vita final benchmark: 3,066 samples, 4.99 ms mean, 2.59 ms minimum, 7.65 ms P95 and 9.19 ms P99. These measure client pipeline time, not total button-to-screen latency. The tester reports excellent video quality, improved perceived responsiveness and uninterrupted audio in the final Flight Simulator session.
 
 Read the complete [release notes in English, Portuguese and Spanish](docs/releases/v0.3.3.md) for the full changelog, benchmark methodology and limitations.
