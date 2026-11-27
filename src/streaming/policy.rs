@@ -69,10 +69,10 @@ pub fn experimental_texture_wait_ms(mode:u8,age_us:u64,remaining:usize,source_du
 pub fn early_wake_gap_us(mode:u8,source_fps:Option<f64>)->Option<u64>{
     if mode==0{return None;}
     let fast=source_fps.is_some_and(|f|f.is_finite()&&(50.0..=125.0).contains(&f));
-    Some(if mode>=2{if fast{12_000}else{14_000}}else if fast{14_000}else{16_000})
+    Some(if mode>=2{if fast{10_000}else{14_000}}else if fast{14_000}else{16_000})
 }
 pub fn late_wait_us(mode:u8,fast:bool)->u64{
-    if !fast || mode==0{0}else if mode>=2{3_000}else{2_000}
+    if !fast || mode==0{0}else if mode>=2{0}else{2_000}
 }
 #[cfg(test)]
 mod latency_lab_tests{
@@ -96,7 +96,7 @@ mod latency_lab_tests{
     }
     #[test]fn pacing_limits(){
         assert_eq!(early_wake_gap_us(1,Some(59.94)),Some(14_000));
-        assert_eq!(early_wake_gap_us(2,Some(60.0)),Some(12_000));
+        assert_eq!(early_wake_gap_us(2,Some(60.0)),Some(10_000));
         assert_eq!(early_wake_gap_us(1,Some(30.0)),Some(16_000));
         assert_eq!(late_wait_us(2,false),0);
         assert_eq!(late_wait_us(1,true),2000);
@@ -204,3 +204,10 @@ pub fn apply_audio_gain(pcm:&mut [i16],percent:u32){
 /// Warm-start hint limited to two Mbps over the ordinary startup rate.
 pub fn bounded_link_hint(start:u32,cap:u32,hint:u32)->u32{hint.max(start).min(start.saturating_add(2_000_000)).min(cap)}
 #[cfg(test)]mod hint_tests{use super::*;#[test]fn bounded(){assert_eq!(bounded_link_hint(6_000_000,15_000_000,0),6_000_000);assert_eq!(bounded_link_hint(6_000_000,15_000_000,u32::MAX),8_000_000);assert_eq!(bounded_link_hint(6_000_000,6_000_000,9_000_000),6_000_000);}}
+
+// Shorten only the waiting window for healthy low-latency streams. Keep full
+// recovery grace on known loss, keyframe recovery or rising jitter.
+pub fn adaptive_reorder_grace_ms(base:u64,mode:u8,low_latency:bool,jitter_us:u64,recovering:bool)->u64{
+    if mode>=2 && low_latency && !recovering && jitter_us<=4_000 { (8+jitter_us/500).clamp(8,16).min(base) } else {base}
+}
+#[cfg(test)] mod adaptive_reorder_tests{use super::*;#[test]fn safe_bounds(){assert_eq!(adaptive_reorder_grace_ms(16,2,true,0,false),8);assert_eq!(adaptive_reorder_grace_ms(18,2,true,4000,false),16);assert_eq!(adaptive_reorder_grace_ms(24,2,true,5000,false),24);assert_eq!(adaptive_reorder_grace_ms(16,2,true,0,true),16);assert_eq!(adaptive_reorder_grace_ms(32,2,false,0,false),32);}}

@@ -23,6 +23,7 @@ pub struct VitaSurface {
     egui_painter: SdlEguiPainter,
     last_video_present:Option<Instant>,
     benchmark:crate::streaming::benchmark::Benchmark,
+    benchmark_internal:bool,
     direct_frame:bool,
 }
 
@@ -55,6 +56,7 @@ impl VitaSurface {
             egui_painter: SdlEguiPainter::default(),
             last_video_present:None,
             benchmark:crate::streaming::benchmark::Benchmark::default(),
+            benchmark_internal:false,
             direct_frame:false,
         })
     }
@@ -91,6 +93,7 @@ impl VitaSurface {
     }
 
     pub fn benchmark_tick(&mut self,active:bool,mode:u8,profile:u8){
+        let internal=crate::experimental::active_internal();if internal!=self.benchmark_internal{self.benchmark.reset();self.benchmark_internal=internal;}
         if let Some(report)=self.benchmark.tick(Instant::now(),active,mode,profile){crate::diagnostics::benchmark_result(&report);}
     }
     pub fn reset_benchmark(&mut self){self.benchmark.reset();}
@@ -191,7 +194,7 @@ impl VitaSurface {
         if let Some((decoded_at, enqueued_at,claimed_at,stages)) = self.pending_display_timestamps.take() {
             let now = Instant::now();
             let gap_us=self.last_video_present.replace(now).map(|at|now.saturating_duration_since(at).as_micros() as u64).unwrap_or(0);
-            self.benchmark.observe(now,now.saturating_duration_since(enqueued_at).as_micros() as u64,gap_us,claimed_at.saturating_duration_since(decoded_at).as_micros() as u64,self.direct_frame);
+            self.benchmark.observe_verified(now,stages.verified.then(||now.saturating_duration_since(enqueued_at).as_micros() as u64),gap_us,claimed_at.saturating_duration_since(decoded_at).as_micros() as u64,self.direct_frame,stages.decoder_age_us);
             self.direct_frame=false;
             crate::streaming::video::metrics::METRICS.presented.fetch_add(1,Ordering::Relaxed);
             crate::streaming::video::metrics::presented(crate::streaming::hud::PresentedStages{decode:stages,present_gap_us:gap_us,display_us:now.saturating_duration_since(decoded_at).as_micros() as u64,pre_present_us:before_present.saturating_duration_since(decoded_at).as_micros() as u64,claim_us:claimed_at.saturating_duration_since(decoded_at).as_micros() as u64,draw_us:before_present.saturating_duration_since(claimed_at).as_micros() as u64,present_call_us:now.saturating_duration_since(before_present).as_micros() as u64,total_us:now.saturating_duration_since(enqueued_at).as_micros() as u64});
@@ -200,7 +203,7 @@ impl VitaSurface {
                 Ordering::Relaxed,
             );
             crate::streaming::video::metrics::METRICS.total_video_pipeline_us.store(
-                now.saturating_duration_since(enqueued_at).as_micros() as u64,
+                if stages.verified{now.saturating_duration_since(enqueued_at).as_micros() as u64}else{u64::MAX},
                 Ordering::Relaxed,
             );
         }

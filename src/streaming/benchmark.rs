@@ -19,12 +19,12 @@ impl Samples{
     }
 }
 #[derive(Clone,Copy,Debug,Default)]
-pub(crate) struct Report{pub phase:u8,pub seconds:u64,pub mode:u8,pub profile:u8,pub pipeline:Distribution,pub gap:Distribution,pub claim:Distribution,pub direct_wakes:u64}
-static STATUS:Mutex<Report>=Mutex::new(Report{phase:0,seconds:0,mode:0,profile:0,pipeline:Distribution{count:0,min:0,avg:0,median:0,p95:0,p99:0,max:0,omitted:0},gap:Distribution{count:0,min:0,avg:0,median:0,p95:0,p99:0,max:0,omitted:0},claim:Distribution{count:0,min:0,avg:0,median:0,p95:0,p99:0,max:0,omitted:0},direct_wakes:0});
+pub(crate) struct Report{pub phase:u8,pub seconds:u64,pub mode:u8,pub profile:u8,pub pipeline:Distribution,pub gap:Distribution,pub claim:Distribution,pub decoder_age:Distribution,pub presented:u64,pub unmatched:u64,pub direct_wakes:u64}
+static STATUS:Mutex<Report>=Mutex::new(Report{phase:0,seconds:0,mode:0,profile:0,pipeline:Distribution{count:0,min:0,avg:0,median:0,p95:0,p99:0,max:0,omitted:0},gap:Distribution{count:0,min:0,avg:0,median:0,p95:0,p99:0,max:0,omitted:0},claim:Distribution{count:0,min:0,avg:0,median:0,p95:0,p99:0,max:0,omitted:0},decoder_age:Distribution{count:0,min:0,avg:0,median:0,p95:0,p99:0,max:0,omitted:0},presented:0,unmatched:0,direct_wakes:0});
 pub(crate) fn status()->Report{STATUS.lock().map(|s|*s).unwrap_or_default()}
 fn publish(r:Report){if let Ok(mut s)=STATUS.lock(){*s=r;}}
 #[derive(Default)]
-pub(crate) struct Benchmark{key:Option<(u8,u8)>,start:Option<Instant>,pipeline:Samples,gap:Samples,claim:Samples,last_status_sec:Option<u64>,done:bool,direct_wakes:u64}
+pub(crate) struct Benchmark{key:Option<(u8,u8)>,start:Option<Instant>,pipeline:Samples,gap:Samples,claim:Samples,decoder_age:Samples,presented:u64,unmatched:u64,last_status_sec:Option<u64>,done:bool,direct_wakes:u64}
 impl Benchmark{
     pub(crate) fn reset(&mut self){
         if self.key.is_some(){*self=Self::default();publish(Report::default());}
@@ -34,7 +34,7 @@ impl Benchmark{
         if self.key!=Some((mode,profile)){
             self.reset();self.key=Some((mode,profile));
             // Allocate before playback measurement begins, never in sample collection.
-            self.pipeline.prepare();self.gap.prepare();self.claim.prepare();
+            self.pipeline.prepare();self.gap.prepare();self.claim.prepare();self.decoder_age.prepare();
             publish(Report{phase:1,mode,profile,..Report::default()});
         }
         let Some(start)=self.start else{return None;};
@@ -42,23 +42,27 @@ impl Benchmark{
         let elapsed=now.saturating_duration_since(start).as_secs();
         if elapsed>=WARMUP+WINDOW{
             self.done=true;
-            let report=Report{phase:3,seconds:WINDOW,mode,profile,pipeline:self.pipeline.finish(),gap:self.gap.finish(),claim:self.claim.finish(),direct_wakes:self.direct_wakes};
+            let report=Report{phase:3,seconds:WINDOW,mode,profile,pipeline:self.pipeline.finish(),gap:self.gap.finish(),claim:self.claim.finish(),decoder_age:self.decoder_age.finish(),presented:self.presented,unmatched:self.unmatched,direct_wakes:self.direct_wakes};
             publish(report);return Some(report);
         }
         if self.last_status_sec!=Some(elapsed){
             self.last_status_sec=Some(elapsed);
-            publish(Report{phase:if elapsed<WARMUP{1}else{2},seconds:if elapsed<WARMUP{elapsed}else{elapsed-WARMUP},mode,profile,pipeline:Distribution{count:self.pipeline.count,..Distribution::default()},..Report::default()});
+            publish(Report{phase:if elapsed<WARMUP{1}else{2},seconds:if elapsed<WARMUP{elapsed}else{elapsed-WARMUP},mode,profile,pipeline:Distribution{count:self.pipeline.count,..Distribution::default()},presented:self.presented,unmatched:self.unmatched,..Report::default()});
         }
         None
     }
     pub(crate) fn observe(&mut self,now:Instant,total:u64,gap:u64,claim:u64,direct:bool){
+        self.observe_verified(now,Some(total),gap,claim,direct,0);
+    }
+    pub(crate) fn observe_verified(&mut self,now:Instant,total:Option<u64>,gap:u64,claim:u64,direct:bool,decoder_age:u64){
         if self.key.is_none()||self.done{return;}
         let start=*self.start.get_or_insert(now);
         let sec=now.saturating_duration_since(start).as_secs();
         if !(WARMUP..WARMUP+WINDOW).contains(&sec){return;}
         if direct{self.direct_wakes+=1;}
-        self.pipeline.add(total);
-        if self.pipeline.count>1 && gap>0{self.gap.add(gap);}
+        self.presented+=1;
+        if let Some(total)=total{self.pipeline.add(total);self.decoder_age.add(decoder_age);}else{self.unmatched+=1;}
+        if self.presented>1 && gap>0{self.gap.add(gap);}
         self.claim.add(claim);
     }
 }
@@ -81,5 +85,6 @@ mod tests{
         assert!(b.tick(t+Duration::from_secs(71),true,2,2).is_none());
         b.tick(t+Duration::from_secs(72),false,2,2);assert!(b.start.is_none());
     }
+    #[test]fn unmatched_frames_not_in_latency(){let t=Instant::now();let mut b=Benchmark::default();b.tick(t,true,2,2);b.observe(t,1,0,0,false);b.observe_verified(t+Duration::from_secs(11),None,16,1,false,0);b.observe_verified(t+Duration::from_secs(12),Some(50),16,1,false,30);let r=b.tick(t+Duration::from_secs(70),true,2,2).unwrap();assert_eq!((r.presented,r.unmatched,r.pipeline.count,r.pipeline.avg,r.decoder_age.avg),(2,1,1,50,30));}
     #[test]fn bounded_storage(){let mut s=Samples::default();s.prepare();for n in 0..CAP+5{s.add(n as u64);}let r=s.finish();assert_eq!(r.omitted,5);assert_eq!(r.max,(CAP+4)as u64);}
 }

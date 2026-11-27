@@ -1,7 +1,7 @@
 //! Bounded PTS mapping; never guesses frame identity.
 use std::collections::VecDeque;
 const CAP:usize=32;
-pub(super) struct Pending<T>{items:VecDeque<(u64,T)>}
+pub(crate) struct Pending<T>{items:VecDeque<(u64,T)>}
 impl<T> Pending<T>{
     pub fn new()->Self{Self{items:VecDeque::with_capacity(CAP)}}
     pub fn push(&mut self,id:u64,t:T){if self.items.len()==CAP{self.items.pop_front();}self.items.push_back((id,t));}

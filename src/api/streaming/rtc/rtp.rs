@@ -187,7 +187,7 @@ impl VideoRtp {
 
     /// Clamp user profile + measured jitter to avoid unsafe zero-delay H264 reordering.
     pub(super) fn set_reorder_grace_ms(&mut self, delay_ms: u64) {
-        self.reorder_grace = std::time::Duration::from_millis(delay_ms.clamp(16, 48));
+        self.reorder_grace = std::time::Duration::from_millis(delay_ms.clamp(8, 48));
     }
 
     pub(super) fn waiting_for_keyframe(&self) -> bool {

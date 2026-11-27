@@ -110,7 +110,7 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
             row(ui,tr("Tela do Vita","Vita output"),if streaming.video_frame().is_some(){"960×544".to_owned()}else{"—".to_owned()},white);
             row(ui,tr("FPS servidor / Vita","FPS source / Vita"),format!("{src} / {fps:.0}"),white);
             row(ui,tr("Input local","Local input"),optional_ms(m.input_us,input.native_count+input.sdl_count>0),health(m.input_us,8000,15000));
-            row(ui,tr("Dados (pipeline local)","Data (local pipeline)"),optional_ms(m.pipeline_us,m.presented>0),health(m.pipeline_us,50000,90000));
+            row(ui,tr("Dados (pipeline local)","Data (local pipeline)"),optional_ms(m.pipeline_us,m.presented>0&&m.pipeline_us!=u64::MAX),if m.pipeline_us==u64::MAX{muted}else{health(m.pipeline_us,50000,90000)});
             row(ui,tr("Uso de rede (UDP)","Network (UDP)"),speed(h.rx_bps.saturating_add(h.tx_bps)),white);
             row(ui,"Download",speed(h.rx_bps),white);row(ui,"Upload",speed(h.tx_bps),white);
             row(ui,"Jitter",millis(h.jitter_us),health(h.jitter_us,10000,25000));
@@ -139,6 +139,7 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                         row(ui,tr("Fila comprimida","Compressed queue"),millis(s.decode.queue_us),white);
                         row(ui,tr("Espera textura","Texture wait"),millis(s.decode.texture_us),white);
                         row(ui,tr("Decodificação H.264","H.264 decode"),millis(s.decode.decode_us),white);
+                        row(ui,tr("Tempo no decoder / pendentes","Decoder age / pending"),format!("{:.2} ms / {}",s.decode.decoder_age_us as f64/1000.0,s.decode.decoder_pending),white);
                         row(ui,tr("Espera exibição","Display wait"),millis(s.display_us),white);
                         row(ui,tr("Pipeline méd / máx","Pipeline avg / max"),if m.stage_samples>0{format!("{:.1} / {:.1} ms",m.pipeline_avg_us as f64/1000.0,m.pipeline_max_us as f64/1000.0)}else{"—".to_owned()},white);
                     }
@@ -187,18 +188,19 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                     let state=match b.phase{1=>format!("{} {}/10 s",tr("Aquecimento","Warmup"),b.seconds),2=>format!("{}/60 s",b.seconds),3=>tr("Concluído","Complete").to_owned(),_=>tr("Aguardando","Waiting").to_owned()};
                     row(ui,tr("Estado","Status"),state,white);
                     row(ui,tr("Decoder / texturas","Decoder / textures"),format!("{} / {} {}",crate::experimental::decoder_name(),crate::experimental::texture_count(),crate::experimental::texture_format()),white);
-                    row(ui,tr("Amostras","Samples"),b.pipeline.count.to_string(),white);
+                    row(ui,tr("PTS válidos / sem par","Matched / unmatched PTS"),format!("{} / {}",b.pipeline.count,b.unmatched),white);
+                    if b.phase==3 {row(ui,tr("FPS total (60 s)","Total FPS (60s)"),format!("{:.2}",b.presented as f64/60.0),white);}
                     if b.phase==3 && b.pipeline.count>0{
                         row(ui,tr("Mín / média","Min / mean"),format!("{:.2} / {:.2} ms",b.pipeline.min as f64/1000.0,b.pipeline.avg as f64/1000.0),white);
                         row(ui,tr("Mediana / P95","Median / P95"),format!("{:.2} / {:.2} ms",b.pipeline.median as f64/1000.0,b.pipeline.p95 as f64/1000.0),white);
+                        row(ui,tr("Decoder méd / P95","Decoder avg / P95"),format!("{:.2} / {:.2} ms",b.decoder_age.avg as f64/1000.0,b.decoder_age.p95 as f64/1000.0),white);
                         row(ui,tr("P99 / máx","P99 / max"),format!("{:.2} / {:.2} ms",b.pipeline.p99 as f64/1000.0,b.pipeline.max as f64/1000.0),white);
                         row(ui,tr("Intervalo P95 / P99","Interval P95 / P99"),format!("{:.2} / {:.2} ms",b.gap.p95 as f64/1000.0,b.gap.p99 as f64/1000.0),white);
                         row(ui,tr("Espera quadro P95 / P99","Frame wait P95 / P99"),format!("{:.2} / {:.2} ms",b.claim.p95 as f64/1000.0,b.claim.p99 as f64/1000.0),white);
-                        row(ui,tr("Quadros/s (60 s)","Frames/s (60s)"),format!("{:.2}",b.pipeline.count as f64/60.0),white);
                         row(ui,tr("Apresentações diretas","Direct presentations"),b.direct_wakes.to_string(),white);
                         row(ui,tr("Amostras fora do limite","Samples beyond cap"),b.pipeline.omitted.to_string(),white);
                     }
-                    note(ui,tr("Reinicia após pausa ou nova sessão.","Restarts after pause or new session."),muted);
+                    note(ui,tr("Só PTS confirmados contam na latência; FPS conta todos os quadros. Não mede botão até tela.","Only matched PTS count for latency; FPS counts all frames. Not button-to-photon."),muted);
                 },
                 _=>{}
             }

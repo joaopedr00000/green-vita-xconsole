@@ -127,6 +127,7 @@ impl VideoReceiver {
             StreamProfile::Balanced => (24 + jitter_ms).clamp(24, 40),
             StreamProfile::Quality => (32 + jitter_ms).clamp(32, 48),
         };
+        let grace_ms=crate::streaming::policy::adaptive_reorder_grace_ms(grace_ms,crate::settings::latency_mode(),self.profile==StreamProfile::LowLatency,self.jitter_us,self.rtp.waiting_for_keyframe()||!self.missing_video_packets.is_empty());
         self.rtp.set_reorder_grace_ms(grace_ms);
         self.bitrate.packet_received();
         let sample_stats = self.rtp.receive(&self.decoder, packet, keyframe_requested);
