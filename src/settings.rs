@@ -159,7 +159,6 @@ pub struct Settings {
     pub lab_performance_clocks:bool,
     pub lab_triple_buffer:bool,
     pub lab_audio_gain_percent:u32,
-    pub lab_yuv:bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,7 +195,7 @@ impl Default for Settings {
             game_profiles: HashMap::new(),
             control_map: crate::streaming::input::default_control_map(),
             native_deadzone_percent: 0,
-            lab_performance_clocks:false,lab_triple_buffer:true,lab_audio_gain_percent:100,lab_yuv:false,
+            lab_performance_clocks:false,lab_triple_buffer:true,lab_audio_gain_percent:100,
         }
     }
 }

@@ -1,6 +1,4 @@
 mod decoder;
-#[derive(Clone,Copy,PartialEq,Eq,Debug)]
-pub enum VideoPixelFormat{Bgr565,Iyuv,Rgba8888,Nv12}
 mod memory;
 pub(crate) mod metrics;
 mod worker;
@@ -27,7 +25,6 @@ pub(crate) struct VideoTextureTarget {
     pub(crate) ptr: usize,
     pub(crate) pitch: u32,
     pub(crate) capacity: u32,
-    pub(crate) format:VideoPixelFormat,
 }
 
 struct DirectVideoOutputState {

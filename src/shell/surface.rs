@@ -1,6 +1,6 @@
 use crate::app::StreamingSession;
 use crate::shell::egui_painter::SdlEguiPainter;
-use crate::streaming::video::{DirectVideoOutput, VideoTextureTarget,VideoPixelFormat};
+use crate::streaming::video::{DirectVideoOutput, VideoTextureTarget};
 use anyhow::{Context, Result};
 use sdl2::pixels::PixelFormatEnum;
 use sdl2::render::{Canvas, Texture};
@@ -113,56 +113,28 @@ impl VitaSurface {
 
         self.detach_direct_video_output();
         let (width, height) = (output.width, output.height);
-        // YUV is an opt-in experiment: preserve BGR565 by default. Never
-        // register planar targets unless the renderer advertises support
-        // and the actual SDL lock supplies a tight, sufficiently large layout.
-        let advertised=self.canvas.info().texture_formats;
-        let mut formats=Vec::new();
-        if crate::experimental::yuv_enabled() && advertised.contains(&PixelFormatEnum::NV12){formats.push((PixelFormatEnum::NV12,VideoPixelFormat::Nv12));}
-        formats.push((PixelFormatEnum::BGR565,VideoPixelFormat::Bgr565));
-        if advertised.contains(&PixelFormatEnum::IYUV){formats.push((PixelFormatEnum::IYUV,VideoPixelFormat::Iyuv));}
-        let mut chosen=None;
-        for (pixel,format) in formats{
-            // SDL2's Vita GXM driver programs the YUV profile in UpdateTexture,
-            // not LockTexture. Our zero-copy decoder normally never calls
-            // UpdateTexture, so prime the hardware color matrix once before
-            // registering the texture addresses. No copies in the frame loop.
-            let yuv=matches!(format,VideoPixelFormat::Nv12|VideoPixelFormat::Iyuv);
-            let neutral=if yuv{
-                if width%2!=0 || height%2!=0{continue;}
-                unsafe{sdl2::sys::SDL_SetYUVConversionMode(sdl2::sys::SDL_YUV_CONVERSION_MODE::SDL_YUV_CONVERSION_BT709);}
-                let luma=(width as usize)*(height as usize);
-                let mut pixels=vec![128u8;luma+luma/2];
-                pixels[..luma].fill(16);
-                Some(pixels)
-            }else{None};
-            let mut textures=Vec::new();let mut targets=Vec::new();
-            let count=if streaming_lab_triple(){3}else{2};
-            for _ in 0..count{
-                let Ok(mut texture)=self.canvas.create_texture_streaming(pixel,width,height)else{break;};
-                if let Some(pixels)=neutral.as_ref(){
-                    // Full-size initialization uses the public SDL update path
-                    // while the texture is still exclusively owned by this thread.
-                    if texture.update(None,pixels,width as usize).is_err(){
-                        crate::diagnostics::step("lab_yuv_profile","INIT_FAILED");
-                        unsafe{texture.destroy();}
-                        break;
-                    }
-                }
-                let target=texture.with_lock(None,|pixels,pitch|{
-                    let valid=if format==VideoPixelFormat::Bgr565{pitch>=width as usize*2 && pixels.len()>=pitch*height as usize}
-                    else{width%2==0 && height%2==0 && pitch==width as usize && pixels.len()>=pitch*height as usize*3/2};
-                    valid.then_some(VideoTextureTarget{ptr:pixels.as_mut_ptr() as usize,pitch:pitch as u32,capacity:pixels.len().min(u32::MAX as usize) as u32,format})
-                });
-                match target{Ok(Some(t))=>{textures.push(texture);targets.push(t);},_=>{unsafe{texture.destroy();}break;}}
+        // BGR565 is the only supported hardware output. Keep the two/three
+        // target experiment independent of the removed YUV color path.
+        let count=if streaming_lab_triple(){3}else{2};
+        let mut textures=Vec::with_capacity(count);
+        let mut targets=Vec::with_capacity(count);
+        for _ in 0..count{
+            let Ok(mut texture)=self.canvas.create_texture_streaming(PixelFormatEnum::BGR565,width,height)else{break;};
+            let target=texture.with_lock(None,|pixels,pitch|{
+                let valid=pitch>=width as usize*2 && pitch%2==0 && pixels.len()>=pitch*height as usize;
+                valid.then_some(VideoTextureTarget{ptr:pixels.as_mut_ptr() as usize,pitch:pitch as u32,capacity:pixels.len().min(u32::MAX as usize) as u32})
+            });
+            match target{
+                Ok(Some(t))=>{textures.push(texture);targets.push(t);}
+                _=>{unsafe{texture.destroy();}break;}
             }
-            if textures.len()>=2{chosen=Some((textures,targets,format));break;}
-            // These candidate textures have never been submitted to the GPU.
-            for texture in textures{unsafe{texture.destroy();}}
         }
-        let (textures,targets,format)=chosen.context("no compatible SDL video texture layout")?;
-        if matches!(format,VideoPixelFormat::Nv12|VideoPixelFormat::Iyuv){crate::diagnostics::step("lab_yuv_profile","BT709_UPDATE_PRIMED");}
-        crate::experimental::record_texture(textures.len(),format);
+        if textures.len()<2{
+            // These targets were never registered or submitted to the GPU.
+            for texture in textures{unsafe{texture.destroy();}}
+            anyhow::bail!("could not allocate two compatible BGR565 video textures");
+        }
+        crate::experimental::record_texture(textures.len());
         crate::diagnostics::step("lab_texture",if textures.len()==3{"TRIPLE"}else{"DOUBLE"});
         output.set_targets(targets);
         self.video_textures = Some(textures);
@@ -202,7 +174,7 @@ impl VitaSurface {
             self.canvas
                 .copy(texture, None, destination)
                 .map_err(anyhow::Error::msg)
-                .context("failed to draw SDL YUV video frame")?;
+                .context("failed to draw SDL BGR565 video frame")?;
         }
 
         Ok(())

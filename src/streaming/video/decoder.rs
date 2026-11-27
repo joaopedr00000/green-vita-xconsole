@@ -1,7 +1,7 @@
 //! PS Vita hardware H.264 decoder (`sceVideodec`/`sceAvcdec`).
 use super::memory::{CdramBlock, release_reserved_decoder_cdram};
 use super::{DecoderConfig, VideoTextureTarget};
-use anyhow::{Context,Result, bail};
+use anyhow::{Result, bail};
 use std::os::raw::c_void;
 use vitasdk_sys::*;
 
@@ -155,18 +155,11 @@ impl HwVideoDecoder {
             };
 
             let output_ptr = direct_target.ptr as *mut u8;
-            let format=direct_target.format;
-            let yuv=matches!(format,super::VideoPixelFormat::Iyuv|super::VideoPixelFormat::Nv12);
-            let (pixel_type,output_pitch)=match format{
-                super::VideoPixelFormat::Bgr565=>(OUTPUT_PIXEL_FORMAT,direct_target.pitch/2),
-                super::VideoPixelFormat::Iyuv=>(SCE_AVCDEC_PIXELFORMAT_YUV420_RASTER as u32,direct_target.pitch),
-                super::VideoPixelFormat::Nv12=>(SCE_AVCDEC_PIXELFORMAT_YUV420_PACKED_RASTER as u32,direct_target.pitch),
-                _=>bail!("unsupported public video format"),
-            };
-            if yuv && (output_pitch!=self.width || self.width%2!=0 || self.height%2!=0){bail!("unsupported YUV pitch");}
-            let required=if yuv{output_pitch.checked_mul(self.height).and_then(|n|n.checked_mul(3)).map(|n|n/2)}else{output_pitch.checked_mul(self.height).and_then(|n|n.checked_mul(2))};
-            if required.is_none_or(|n|n>direct_target.capacity){bail!("video target too small");}
+            let output_pitch = direct_target.pitch / OUTPUT_BYTES_PER_PIXEL;
             let output_capacity = direct_target.capacity;
+            if direct_target.pitch % OUTPUT_BYTES_PER_PIXEL != 0 || output_pitch.checked_mul(self.height).and_then(|n|n.checked_mul(OUTPUT_BYTES_PER_PIXEL)).is_none_or(|n|n>output_capacity) {
+                bail!("invalid BGR565 target pitch or capacity");
+            }
             if output_pitch < self.width {
                 bail!(
                     "direct video texture pitch {output_pitch} is smaller than {}",
@@ -177,7 +170,7 @@ impl HwVideoDecoder {
             let mut picture = SceAvcdecPicture {
                 size: size_of::<SceAvcdecPicture>() as u32,
                 frame: SceAvcdecFrame {
-                    pixelType: pixel_type,
+                    pixelType: OUTPUT_PIXEL_FORMAT,
                     framePitch: output_pitch,
                     frameWidth: self.width,
                     frameHeight: self.height,
@@ -194,7 +187,7 @@ impl HwVideoDecoder {
                             reserved: [0; 14],
                         },
                     },
-                    pPicture: [output_ptr.cast(), if yuv{output_ptr.add((self.width*self.height) as usize).cast()}else{std::ptr::null_mut()}],
+                    pPicture: [output_ptr.cast(), std::ptr::null_mut()],
                 },
                 info: std::mem::zeroed(),
             };
@@ -215,9 +208,16 @@ impl HwVideoDecoder {
 
             // `framePitch` is in pixels. Validate the complete byte size before trusting the
             // decoder-provided pitch to write into the SDL texture.
-            let pitch=picture.frame.framePitch;
-            if yuv && pitch!=self.width{bail!("unexpected YUV output pitch");}
-            let output_len=if yuv{pitch.checked_mul(self.height).and_then(|n|n.checked_mul(3)).map(|n|n/2)}else{pitch.checked_mul(self.height).and_then(|n|n.checked_mul(2))}.context("invalid decoded pitch")?;
+            let row_bytes = picture
+                .frame
+                .framePitch
+                .checked_mul(OUTPUT_BYTES_PER_PIXEL)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("video frame pitch overflow: {}", picture.frame.framePitch)
+                })?;
+            let output_len = row_bytes.checked_mul(self.height).ok_or_else(|| {
+                anyhow::anyhow!("video output size overflow: {row_bytes} * {}", self.height)
+            })?;
             if output_len > output_capacity {
                 bail!(
                     "sceAvcdecDecode produced pitch requiring {output_len} bytes, but output buffer has {} bytes",
