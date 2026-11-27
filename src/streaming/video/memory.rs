@@ -72,21 +72,16 @@ fn free_memory_summary() -> String {
 pub(super) struct CdramBlock {
     uid: SceUID,
     pub(super) ptr: *mut u8,
-    capacity:u32,
 }
 
 impl CdramBlock {
     pub(super) fn allocate(name: &str, size: u32) -> Result<Self> {
-        Self::allocate_with_alignments(name,size,BLOCK_ALIGNMENT,BLOCK_ALIGNMENT)
-    }
-    pub(super) fn capacity(&self)->u32{self.capacity}
-    pub(super) fn allocate_with_alignments(name:&str,size:u32,address_alignment:u32,size_alignment:u32)->Result<Self>{
         let c_name = CString::new(name).expect("static name has no interior NUL");
-        let capacity = size.div_ceil(size_alignment) * size_alignment;
+        let capacity = size.div_ceil(BLOCK_ALIGNMENT) * BLOCK_ALIGNMENT;
         let mut options = SceKernelAllocMemBlockOpt {
             size: size_of::<SceKernelAllocMemBlockOpt>() as u32,
             attr: SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_HAS_ALIGNMENT,
-            alignment: address_alignment,
+            alignment: BLOCK_ALIGNMENT,
             uidBaseBlock: 0,
             strBaseBlockName: std::ptr::null(),
             flags: 0,
@@ -118,7 +113,7 @@ impl CdramBlock {
 
         Ok(Self {
             uid,
-            ptr: base.cast(),capacity,
+            ptr: base.cast(),
         })
     }
 }

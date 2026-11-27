@@ -172,13 +172,13 @@ pub(crate) fn hud_metrics(h:&crate::streaming::hud::StreamHud){
     let (n,last,avg,max)=crate::native_input::change_metrics();
     write_record("latency_lab",&format!("session_secs={} audio_target_ms={} audio_sdl_ms={} audio_batch_gap_ema_us={} audio_trim_frames={} telemetry_missed={} raw_busy_reads={} raw_changes={} raw_change_last_us={} raw_change_avg_us={} raw_change_max_us={} nack_grace_ms={} late_unrequested={} missing_expired={} missing_untracked={}",h.session_secs,m.audio_ms,m.audio_queued_ms,m.audio_arrival_us,m.audio_trim_frames,m.telemetry_missed,crate::native_input::busy_reads(),n,last,avg,max,h.nack_grace_ms,h.unrequested_late,h.expired_missing,h.untracked_missing));
     use crate::streaming::video::metrics::{AUDIO_REFILLS,AUDIO_DEVICE_PERIOD_US,AUDIO_PLC_FRAMES,AUDIO_HANDOFF_DROPS,AUDIO_HANDOFF_MAX_US};
-    write_record("opennow_lab",&format!("internal_decoder={} textures={} format={} plc_frames={} audio_handoff_drops={} audio_handoff_max_us={}",crate::experimental::active_internal(),crate::experimental::texture_count(),crate::experimental::texture_format(),AUDIO_PLC_FRAMES.load(Ordering::Relaxed),AUDIO_HANDOFF_DROPS.load(Ordering::Relaxed),AUDIO_HANDOFF_MAX_US.load(Ordering::Relaxed)));
+    write_record("opennow_lab",&format!("decoder=public textures={} format={} plc_frames={} audio_handoff_drops={} audio_handoff_max_us={}",crate::experimental::texture_count(),crate::experimental::texture_format(),AUDIO_PLC_FRAMES.load(Ordering::Relaxed),AUDIO_HANDOFF_DROPS.load(Ordering::Relaxed),AUDIO_HANDOFF_MAX_US.load(Ordering::Relaxed)));
     write_record("audio_refill",&format!("refills_without_rebuffer={} device_period_us={}",AUDIO_REFILLS.load(Ordering::Relaxed),AUDIO_DEVICE_PERIOD_US.load(Ordering::Relaxed)));
     if let Some(r)=h.rtt{write_record("ice_rtt",&format!("current_us={} average_us={} responses={} observed_age_ms={}",r.current_us,r.average_us,r.responses,r.age().as_millis()));}
 }
 
 pub(crate) fn benchmark_result(r:&crate::streaming::benchmark::Report){
-    write_record("benchmark60_lab",&format!("internal={} textures={} format={}",crate::experimental::active_internal(),crate::experimental::texture_count(),crate::experimental::texture_format()));
+    write_record("benchmark60_lab",&format!("decoder=public textures={} format={}",crate::experimental::texture_count(),crate::experimental::texture_format()));
     for (stage,d) in [("benchmark60_pipeline",r.pipeline),("benchmark60_interval",r.gap),("benchmark60_claim",r.claim)]{
         write_record(stage,&format!("mode={} profile={} window_s={} samples={} omitted={} min_us={} avg_us={} median_us={} p95_us={} p99_us={} max_us={} direct_wakes={}",r.mode,r.profile,r.seconds,d.count,d.omitted,d.min,d.avg,d.median,d.p95,d.p99,d.max,r.direct_wakes));
     }

@@ -186,7 +186,7 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                     let b=crate::streaming::benchmark::status();
                     let state=match b.phase{1=>format!("{} {}/10 s",tr("Aquecimento","Warmup"),b.seconds),2=>format!("{}/60 s",b.seconds),3=>tr("Concluído","Complete").to_owned(),_=>tr("Aguardando","Waiting").to_owned()};
                     row(ui,tr("Estado","Status"),state,white);
-                    row(ui,tr("Decoder / texturas","Decoder / textures"),format!("{} / {} {}",if crate::experimental::active_internal(){"Low Delay"}else{"Public"},crate::experimental::texture_count(),crate::experimental::texture_format()),white);
+                    row(ui,tr("Decoder / texturas","Decoder / textures"),format!("Public / {} {}",crate::experimental::texture_count(),crate::experimental::texture_format()),white);
                     row(ui,tr("Amostras","Samples"),b.pipeline.count.to_string(),white);
                     if b.phase==3 && b.pipeline.count>0{
                         row(ui,tr("Mín / média","Min / mean"),format!("{:.2} / {:.2} ms",b.pipeline.min as f64/1000.0,b.pipeline.avg as f64/1000.0),white);

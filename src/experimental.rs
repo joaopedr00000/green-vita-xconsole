@@ -10,10 +10,8 @@ pub(crate) fn yuv_enabled()->bool{YUV.load(Ordering::Relaxed)}
 pub(crate) fn record_texture(count:usize,format:crate::streaming::video::VideoPixelFormat){ACTIVE_TEXTURES.store(count as u32,Ordering::Relaxed);ACTIVE_FORMAT.store(match format{crate::streaming::video::VideoPixelFormat::Bgr565=>0,crate::streaming::video::VideoPixelFormat::Nv12=>1,crate::streaming::video::VideoPixelFormat::Iyuv=>2,_=>3},Ordering::Relaxed);}
 pub(crate) fn texture_count()->u32{ACTIVE_TEXTURES.load(Ordering::Relaxed)}
 pub(crate) fn texture_format()->&'static str{match ACTIVE_FORMAT.load(Ordering::Relaxed){1=>"NV12",2=>"IYUV",3=>"RGBA",_=>"BGR565"}}
-static INTERNAL:AtomicBool=AtomicBool::new(true);
-pub(crate) fn configure(s:&crate::settings::Settings){TRIPLE.store(s.lab_triple_buffer,Ordering::Relaxed);YUV.store(s.lab_yuv,Ordering::Relaxed);INTERNAL.store(s.lab_internal_decoder,Ordering::Relaxed);AUDIO_GAIN.store(s.lab_audio_gain_percent.clamp(100,150),Ordering::Relaxed);}
+pub(crate) fn configure(s:&crate::settings::Settings){TRIPLE.store(s.lab_triple_buffer,Ordering::Relaxed);YUV.store(s.lab_yuv,Ordering::Relaxed);AUDIO_GAIN.store(s.lab_audio_gain_percent.clamp(100,150),Ordering::Relaxed);}
 pub(crate) fn triple_enabled()->bool{TRIPLE.load(Ordering::Relaxed)}
-pub(crate) fn internal_enabled()->bool{INTERNAL.load(Ordering::Relaxed)}
 #[cfg(target_os="vita")]
 fn pin(mask:u32,label:&'static str){let r=unsafe{vitasdk_sys::sceKernelChangeThreadCpuAffinityMask(vitasdk_sys::sceKernelGetThreadId(),mask as i32)};crate::diagnostics::step(label,if r>=0{"OK"}else{"FAILED"});}
 pub(crate) fn pin_render(){#[cfg(target_os="vita")]pin(vitasdk_sys::SCE_KERNEL_CPU_MASK_USER_0,"lab_render_affinity");}
@@ -36,8 +34,3 @@ fn apply(clocks:[i32;4]){
     for (v,set) in clocks.into_iter().zip([scePowerSetArmClockFrequency,scePowerSetBusClockFrequency,scePowerSetGpuClockFrequency,scePowerSetGpuXbarClockFrequency] as [unsafe extern "C" fn(i32)->i32;4]){if v>0{let r=unsafe{set(v)};if r<0{crate::diagnostics::step("lab_clocks","SET_FAILED");}}}
 }
 impl Drop for PerformanceMode{fn drop(&mut self){#[cfg(target_os="vita")]apply(self.old);}}
-
-static ACTIVE_INTERNAL:AtomicBool=AtomicBool::new(false);
-pub(crate) fn disable_internal(){INTERNAL.store(false,Ordering::Relaxed);crate::diagnostics::step("lab_decoder","PUBLIC_FALLBACK");}
-pub(crate) fn record_decoder(internal:bool){ACTIVE_INTERNAL.store(internal,Ordering::Relaxed);}
-pub(crate) fn active_internal()->bool{ACTIVE_INTERNAL.load(Ordering::Relaxed)}

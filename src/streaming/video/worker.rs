@@ -1,4 +1,4 @@
-use super::decoder::{HwVideoDecoder,FrameTiming};
+use super::decoder::HwVideoDecoder;
 use super::metrics;
 use super::{DecodedFrame, DecoderConfig, DirectVideoOutput};
 use anyhow::{Context, Result};
@@ -228,23 +228,28 @@ fn decode_queued_access_unit(
     };
     // Measure the hardware call and contain an unexpected decoder panic inside its worker.
     let decode_started_at = Instant::now();
-    let stages=crate::streaming::hud::DecodeStages {queue_us:dequeued_at.saturating_duration_since(access_unit.queued_at).as_micros() as u64,texture_us:decode_started_at.saturating_duration_since(texture_started_at).as_micros() as u64,decode_us:0};
-    let timing=FrameTiming{enqueued:access_unit.queued_at,stages,generation:access_unit.generation};
-    let internal=decoder.as_ref().is_some_and(HwVideoDecoder::is_internal);
-    let decode_result=catch_unwind(AssertUnwindSafe(||decoder.as_mut().expect("decoder recreated above").decode(&access_unit.data,direct_target.target,timing)));
+    let decode_result = catch_unwind(AssertUnwindSafe(|| {
+        decoder
+            .as_mut()
+            .expect("decoder recreated above")
+            .decode(&access_unit.data, direct_target.target)
+    }));
     let decode_finished_at=Instant::now();
-    if matches!(&decode_result,Ok(Err(_))|Err(_)) && internal{crate::experimental::disable_internal();}
+    let stages=crate::streaming::hud::DecodeStages {queue_us:dequeued_at.saturating_duration_since(access_unit.queued_at).as_micros() as u64,texture_us:decode_started_at.saturating_duration_since(texture_started_at).as_micros() as u64,decode_us:decode_finished_at.saturating_duration_since(decode_started_at).as_micros() as u64};
+    metrics::METRICS.decode_us.store(
+        stages.decode_us,
+        Ordering::Relaxed,
+    );
     if access_unit.generation != generation.load(Ordering::Acquire) {
         return;
     }
 
     match decode_result {
-        Ok(Ok(Some(timing))) if timing.generation==generation.load(Ordering::Acquire) => {
-            metrics::METRICS.decode_us.store(timing.stages.decode_us,Ordering::Relaxed);
+        Ok(Ok(true)) => {
             metrics::METRICS.decoded.fetch_add(1, Ordering::Relaxed);
-            let frame = direct_target.publish(decode_finished_at,timing.enqueued,timing.stages);
+            let frame = direct_target.publish(decode_finished_at,access_unit.queued_at,stages);
             metrics::METRICS.pipeline_age_us.store(
-                timing.enqueued.elapsed().as_micros() as u64,
+                access_unit.queued_at.elapsed().as_micros() as u64,
                 Ordering::Relaxed,
             );
             publish_result(
@@ -253,7 +258,7 @@ fn decode_queued_access_unit(
                 Ok(frame),
             );
         }
-        Ok(Ok(_)) => {}
+        Ok(Ok(false)) => {}
         Ok(Err(error)) => {
             *decoder = None;
             publish_result(latest_result, result_ready, Err(error.to_string()));
