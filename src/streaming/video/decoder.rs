@@ -259,6 +259,9 @@ pub struct HwVideoDecoder {
     empty: u64,
     call_total_us: u64,
     call_max_us: u64,
+    frame_lag_sum: u64,
+    frame_lag_max: u64,
+    matched: u64,
     last_report: Instant,
 }
 
@@ -267,7 +270,7 @@ impl HwVideoDecoder {
         let backend=PublicDecoder::new(config)?;
         crate::diagnostics::step("lab_decoder","PUBLIC");
         Ok(Self{backend,pending:Pending::new(),seq:0,no_output:0,peak_no_output:0,
-            peak_pending:0,outputs:0,empty:0,call_total_us:0,call_max_us:0,last_report:Instant::now()})
+            peak_pending:0,outputs:0,empty:0,call_total_us:0,call_max_us:0,frame_lag_sum:0,frame_lag_max:0,matched:0,last_report:Instant::now()})
     }
     pub fn decode(&mut self,data:&[u8],target:VideoTextureTarget,mut timing:FrameTiming)->Result<Option<FrameTiming>>{
         self.seq=self.seq.saturating_add(1);
@@ -283,6 +286,9 @@ impl HwVideoDecoder {
             self.outputs+=1;
             self.no_output=0;
             if let Some((mut original,submitted))=self.pending.take(id){
+                let lag=pts.saturating_sub(id)/super::AU_PTS_STEP;
+                self.frame_lag_sum=self.frame_lag_sum.saturating_add(lag);
+                self.frame_lag_max=self.frame_lag_max.max(lag);self.matched+=1;
                 original.stages.verified=true;
                 original.stages.decoder_age_us=submitted.elapsed().as_micros() as u64;
                 original.stages.decoder_pending=self.pending.len() as u32;
@@ -302,10 +308,12 @@ impl HwVideoDecoder {
         if self.last_report.elapsed().as_secs()>=5 {
             let calls=self.outputs+self.empty;
             crate::diagnostics::decoder_buffer_info(self.outputs,self.empty,self.peak_no_output,
-                self.pending.len(),self.peak_pending,self.call_total_us/calls.max(1),self.call_max_us);
+                self.pending.len(),self.peak_pending,self.call_total_us/calls.max(1),self.call_max_us,
+                self.frame_lag_sum.saturating_mul(100)/self.matched.max(1),self.frame_lag_max);
             self.last_report=Instant::now();
             self.outputs=0;self.empty=0;self.peak_no_output=self.no_output;
             self.peak_pending=self.pending.len();self.call_total_us=0;self.call_max_us=0;
+            self.frame_lag_sum=0;self.frame_lag_max=0;self.matched=0;
         }
         Ok(result)
     }

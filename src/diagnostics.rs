@@ -191,6 +191,10 @@ pub(crate) fn decoder_color_info(color:[u8;4],csc:u8){
 
 /// Five-second public decoder window. Pending counts are unmatched submitted PTS,
 /// not a direct measurement of the hardware DPB size.
-pub(crate) fn decoder_buffer_info(outputs:u64,empty:u64,peak_empty:u32,pending:usize,peak_pending:usize,call_avg_us:u64,call_max_us:u64){
-    write_record("decoder_buffer",&format!("outputs={outputs} no_output={empty} max_empty_run={peak_empty} pending_pts={pending} peak_pending_pts={peak_pending} call_avg_us={call_avg_us} call_max_us={call_max_us}"));
+pub(crate) fn decoder_buffer_info(outputs:u64,empty:u64,peak_empty:u32,pending:usize,peak_pending:usize,call_avg_us:u64,call_max_us:u64,lag_x100:u64,lag_max:u64){
+    write_record("decoder_buffer",&format!("outputs={outputs} no_output={empty} max_empty_run={peak_empty} pending_pts={pending} peak_pending_pts={peak_pending} call_avg_us={call_avg_us} call_max_us={call_max_us} pts_lag_frames_x100={lag_x100} pts_lag_max={lag_max}"));
+}
+
+pub(crate) fn decoder_sps_info(profile:u8,flags:u8,level:u8,refs:u32,restriction:Option<(u32,u32)>,poc2:bool,applied:bool){
+    write_record("decoder_sps",&format!("profile={profile} flags={flags:02x} level={level} refs={refs} restriction={restriction:?} poc2={poc2} tightened={applied}"));
 }
