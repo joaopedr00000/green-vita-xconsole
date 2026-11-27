@@ -319,12 +319,9 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
                 ui.small(if pt{"Recuperação adaptativa da fila de vídeo: automática."}else{"Adaptive video queue recovery: automatic."});
                 ui.separator();
                 ui.heading(if pt{"Laboratório 0.3.4"}else{"0.3.4 Lab"});
-                let labels=if pt{["Três texturas de vídeo","Frequências de desempenho"]}else{["Triple video textures","Performance clocks"]};
-                let values=[app.settings.lab_triple_buffer,app.settings.lab_performance_clocks];
-                for (i,label) in labels.into_iter().enumerate(){if checkbox_row(ui,selected_index==row_index,values[i],label.to_owned()){commands.push(Command::ToggleLab(i as u8).into());}row_index+=1;}
+                ui.small(if pt{"Decoder Public e três texturas BGR565: fixos."}else{"Public decoder and three BGR565 textures: fixed."});
+                if checkbox_row(ui,selected_index==row_index,app.settings.lab_performance_clocks,if pt{"Frequências de desempenho".into()}else{"Performance clocks".into()}){commands.push(Command::ToggleLab(1).into());}row_index+=1;
                 if focus_row(ui,selected_index==row_index,format!("{}: {}% >",if pt{"Ganho de áudio"}else{"Audio gain"},app.settings.lab_audio_gain_percent.clamp(100,150))){commands.push(Command::ToggleLab(2).into());}row_index+=1;
-                if checkbox_row(ui,selected_index==row_index,app.settings.lab_low_delay_test,if pt{"Decoder Low Delay (experimental)".into()}else{"Low Delay decoder (experimental)".into()}){commands.push(Command::ToggleLab(3).into());}row_index+=1;
-                ui.small(if pt{"Reconecte após alterar decoder ou texturas. Low Delay é experimental; pode retornar ao público em caso de falha."}else{"Reconnect after changing decoder or textures. Low Delay is experimental; errors may fall back to public."});
                 ui.separator();
                 ui.heading(if pt { "Mapeamento dos controles" } else { "Controller mapping" });
                 ui.small(if pt{"Gamepad RAW: automático no Vita; SDL2 para compatibilidade."}else{"RAW gamepad: automatic on Vita; SDL2 compatibility fallback."});
@@ -634,7 +631,7 @@ impl App {
                 self.settings.save();
             }
             Command::ToggleLab(i)=>{
-                match i{0=>self.settings.lab_triple_buffer=!self.settings.lab_triple_buffer,1=>self.settings.lab_performance_clocks=!self.settings.lab_performance_clocks,2=>self.settings.lab_audio_gain_percent=match self.settings.lab_audio_gain_percent{100=>125,125=>150,_=>100},3=>self.settings.lab_low_delay_test=!self.settings.lab_low_delay_test,_=>{}}
+                match i{1=>self.settings.lab_performance_clocks=!self.settings.lab_performance_clocks,2=>self.settings.lab_audio_gain_percent=match self.settings.lab_audio_gain_percent{100=>125,125=>150,_=>100},_=>{}}
                 crate::experimental::configure(&self.settings);self.settings.save();
             }
             Command::CycleNativeDeadzone => {

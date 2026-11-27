@@ -23,7 +23,6 @@ pub struct VitaSurface {
     egui_painter: SdlEguiPainter,
     last_video_present:Option<Instant>,
     benchmark:crate::streaming::benchmark::Benchmark,
-    benchmark_internal:bool,
     direct_frame:bool,
 }
 
@@ -56,7 +55,6 @@ impl VitaSurface {
             egui_painter: SdlEguiPainter::default(),
             last_video_present:None,
             benchmark:crate::streaming::benchmark::Benchmark::default(),
-            benchmark_internal:false,
             direct_frame:false,
         })
     }
@@ -93,7 +91,6 @@ impl VitaSurface {
     }
 
     pub fn benchmark_tick(&mut self,active:bool,mode:u8,profile:u8){
-        let internal=crate::experimental::active_internal();if internal!=self.benchmark_internal{self.benchmark.reset();self.benchmark_internal=internal;}
         if let Some(report)=self.benchmark.tick(Instant::now(),active,mode,profile){crate::diagnostics::benchmark_result(&report);}
     }
     pub fn reset_benchmark(&mut self){self.benchmark.reset();}
@@ -116,9 +113,8 @@ impl VitaSurface {
 
         self.detach_direct_video_output();
         let (width, height) = (output.width, output.height);
-        // BGR565 is the only supported hardware output. Keep the two/three
-        // target experiment independent of the removed YUV color path.
-        let count=if streaming_lab_triple(){3}else{2};
+        // Three direct BGR565 targets are mandatory; do not silently fall back.
+        let count=3;
         let mut textures=Vec::with_capacity(count);
         let mut targets=Vec::with_capacity(count);
         for _ in 0..count{
@@ -132,13 +128,13 @@ impl VitaSurface {
                 _=>{unsafe{texture.destroy();}break;}
             }
         }
-        if textures.len()<2{
+        if textures.len()!=count{
             // These targets were never registered or submitted to the GPU.
             for texture in textures{unsafe{texture.destroy();}}
-            anyhow::bail!("could not allocate two compatible BGR565 video textures");
+            anyhow::bail!("could not allocate three compatible BGR565 video textures");
         }
         crate::experimental::record_texture(textures.len());
-        crate::diagnostics::step("lab_texture",if textures.len()==3{"TRIPLE"}else{"DOUBLE"});
+        crate::diagnostics::step("lab_texture","TRIPLE");
         output.set_targets(targets);
         self.video_textures = Some(textures);
         self.displayed_video_texture = None;
@@ -228,4 +224,3 @@ impl VitaSurface {
     }
 }
 
-fn streaming_lab_triple()->bool{crate::experimental::triple_enabled()}

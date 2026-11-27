@@ -157,8 +157,6 @@ pub struct Settings {
     pub control_map: [u8; 16],
     pub native_deadzone_percent: u8,
     pub lab_performance_clocks:bool,
-    pub lab_triple_buffer:bool,
-    pub lab_low_delay_test:bool,
     pub lab_audio_gain_percent:u32,
 }
 
@@ -196,7 +194,7 @@ impl Default for Settings {
             game_profiles: HashMap::new(),
             control_map: crate::streaming::input::default_control_map(),
             native_deadzone_percent: 0,
-            lab_performance_clocks:false,lab_triple_buffer:true,lab_low_delay_test:false,lab_audio_gain_percent:100,
+            lab_performance_clocks:false,lab_audio_gain_percent:100,
         }
     }
 }

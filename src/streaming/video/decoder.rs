@@ -84,6 +84,7 @@ pub struct PublicDecoder {
     _library: AvcdecLibrary,
     width: u32,
     height: u32,
+    last_color_info: Option<[u8; 4]>,
 }
 
 impl PublicDecoder {
@@ -128,11 +129,12 @@ impl PublicDecoder {
                 _library: library,
                 width: config.output_width,
                 height: config.output_height,
+                last_color_info: None,
             })
         }
     }
 
-    /// Decodes one Access Unit. Returns `false` if the hardware buffered it without producing a picture yet.
+    /// Decodes one Access Unit. Returns None when the hardware produces no picture yet.
     pub fn decode(
         &mut self,
         access_unit: &[u8],
@@ -225,6 +227,12 @@ impl PublicDecoder {
                     output_capacity
                 );
             }
+            let color = [picture.info.colourPrimaries, picture.info.transferCharacteristics,
+                picture.info.matrixCoefficients, picture.info.videoFullRangeFlag];
+            if self.last_color_info != Some(color) {
+                crate::diagnostics::decoder_color_info(color, 0);
+                self.last_color_info = Some(color);
+            }
             Ok(Some(((picture.info.pts.upper as u64)<<32)|picture.info.pts.lower as u64))
         }
     }
@@ -236,54 +244,69 @@ unsafe impl Send for PublicDecoder {}
 
 use std::time::Instant;
 use crate::streaming::hud::DecodeStages;
-use super::{decoder_internal,timing::Pending};
+use super::timing::Pending;
 #[derive(Clone,Copy)]
 pub(super) struct FrameTiming{pub enqueued:Instant,pub stages:DecodeStages,pub generation:u64}
-enum Backend{Public(PublicDecoder),Internal(decoder_internal::HwVideoDecoder)}
-pub struct HwVideoDecoder{backend:Backend,pending:Pending<(FrameTiming,Instant)>,seq:u64,no_output:u8}
-impl HwVideoDecoder{
+
+pub struct HwVideoDecoder {
+    backend: PublicDecoder,
+    pending: Pending<(FrameTiming,Instant)>,
+    seq: u64,
+    no_output: u32,
+    peak_no_output: u32,
+    peak_pending: usize,
+    outputs: u64,
+    empty: u64,
+    call_total_us: u64,
+    call_max_us: u64,
+    last_report: Instant,
+}
+
+impl HwVideoDecoder {
     pub fn new(config:DecoderConfig)->Result<Self>{
-        if crate::experimental::internal_enabled(){
-            match decoder_internal::HwVideoDecoder::new(config){
-                Ok(d)=>{crate::diagnostics::step("lab_decoder","INTERNAL_LOW_DELAY");crate::experimental::record_decoder(true);return Ok(Self{backend:Backend::Internal(d),pending:Pending::new(),seq:0,no_output:0});}
-                Err(e)=>{crate::diagnostics::failure("lab_decoder",&format!("{e:#}"));crate::experimental::disable_internal();}
-            }
-        }
-        crate::experimental::record_decoder(false);
+        let backend=PublicDecoder::new(config)?;
         crate::diagnostics::step("lab_decoder","PUBLIC");
-        Ok(Self{backend:Backend::Public(PublicDecoder::new(config)?),pending:Pending::new(),seq:0,no_output:0})
+        Ok(Self{backend,pending:Pending::new(),seq:0,no_output:0,peak_no_output:0,
+            peak_pending:0,outputs:0,empty:0,call_total_us:0,call_max_us:0,last_report:Instant::now()})
     }
-    pub fn is_internal(&self)->bool{matches!(self.backend,Backend::Internal(_))}
     pub fn decode(&mut self,data:&[u8],target:VideoTextureTarget,mut timing:FrameTiming)->Result<Option<FrameTiming>>{
         self.seq=self.seq.saturating_add(1);
         let pts=self.seq.saturating_mul(super::AU_PTS_STEP);
         let started=Instant::now();
-        let (returned,read_us)=match &mut self.backend{
-            Backend::Public(d)=>{
-                let returned=d.decode(data,target,pts)?;
-                timing.stages.decode_us=started.elapsed().as_micros() as u64;
-                self.pending.push(pts,(timing,started));(returned,0)
+        let returned=self.backend.decode(data,target,pts)?;
+        let call_us=started.elapsed().as_micros() as u64;
+        timing.stages.decode_us=call_us;
+        self.pending.push(pts,(timing,started));
+        self.call_total_us=self.call_total_us.saturating_add(call_us);
+        self.call_max_us=self.call_max_us.max(call_us);
+        let result=if let Some(id)=returned {
+            self.outputs+=1;
+            self.no_output=0;
+            if let Some((mut original,submitted))=self.pending.take(id){
+                original.stages.verified=true;
+                original.stages.decoder_age_us=submitted.elapsed().as_micros() as u64;
+                original.stages.decoder_pending=self.pending.len() as u32;
+                Some(original)
+            }else{
+                timing.stages.verified=false;
+                timing.stages.decoder_pending=self.pending.len() as u32;
+                Some(timing)
             }
-            Backend::Internal(d)=>{
-                d.submit_access_unit(data)?;
-                debug_assert_eq!(d.submitted_sequence(),self.seq);
-                timing.stages.decode_us=started.elapsed().as_micros() as u64;
-                self.pending.push(pts,(timing,started));
-                let read=Instant::now();let returned=d.get_picture(target)?;
-                (returned,read.elapsed().as_micros() as u64)
-            }
-        };
-        let Some(id)=returned else{
-            self.no_output=self.no_output.saturating_add(1);
-            if self.is_internal()&&self.no_output>=24{bail!("internal AVCDEC: 24 submissions without output");}return Ok(None);
-        };
-        self.no_output=0;
-        if let Some((mut original,submitted))=self.pending.take(id){
-            original.stages.verified=true;original.stages.decoder_age_us=submitted.elapsed().as_micros() as u64;
-            original.stages.decode_us=original.stages.decode_us.saturating_add(read_us);
-            original.stages.decoder_pending=self.pending.len() as u32;Ok(Some(original))
         }else{
-            timing.stages.verified=false;timing.stages.decoder_pending=self.pending.len() as u32;Ok(Some(timing))
+            self.empty+=1;
+            self.no_output=self.no_output.saturating_add(1);
+            self.peak_no_output=self.peak_no_output.max(self.no_output);
+            None
+        };
+        self.peak_pending=self.peak_pending.max(self.pending.len());
+        if self.last_report.elapsed().as_secs()>=5 {
+            let calls=self.outputs+self.empty;
+            crate::diagnostics::decoder_buffer_info(self.outputs,self.empty,self.peak_no_output,
+                self.pending.len(),self.peak_pending,self.call_total_us/calls.max(1),self.call_max_us);
+            self.last_report=Instant::now();
+            self.outputs=0;self.empty=0;self.peak_no_output=self.no_output;
+            self.peak_pending=self.pending.len();self.call_total_us=0;self.call_max_us=0;
         }
+        Ok(result)
     }
 }

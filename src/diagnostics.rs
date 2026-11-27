@@ -183,3 +183,14 @@ pub(crate) fn benchmark_result(r:&crate::streaming::benchmark::Report){
         write_record(stage,&format!("mode={} profile={} window_s={} samples={} omitted={} min_us={} avg_us={} median_us={} p95_us={} p99_us={} max_us={} direct_wakes={} presented={} unmatched={}",r.mode,r.profile,r.seconds,d.count,d.omitted,d.min,d.avg,d.median,d.p95,d.p99,d.max,r.direct_wakes,r.presented,r.unmatched));
     }
 }
+
+/// Report numeric stream metadata only, on first output or a metadata change.
+pub(crate) fn decoder_color_info(color:[u8;4],csc:u8){
+    write_record("decoder_color",&format!("primaries={} transfer={} matrix={} full_range={} csc={}",color[0],color[1],color[2],color[3],csc));
+}
+
+/// Five-second public decoder window. Pending counts are unmatched submitted PTS,
+/// not a direct measurement of the hardware DPB size.
+pub(crate) fn decoder_buffer_info(outputs:u64,empty:u64,peak_empty:u32,pending:usize,peak_pending:usize,call_avg_us:u64,call_max_us:u64){
+    write_record("decoder_buffer",&format!("outputs={outputs} no_output={empty} max_empty_run={peak_empty} pending_pts={pending} peak_pending_pts={peak_pending} call_avg_us={call_avg_us} call_max_us={call_max_us}"));
+}
