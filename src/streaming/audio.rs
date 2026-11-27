@@ -115,8 +115,8 @@ pub(crate) struct AudioPacket{pub data:Bytes,pub timestamp:u32,pub missing:u16,p
 struct Device{id:sdl2::sys::SDL_AudioDeviceID,period_bytes:u32,period_us:u64}
 impl Device{
     fn open()->Result<Self>{
-        use sdl2::sys::*;
-        let desired=SDL_AudioSpec{freq:AUDIO_SAMPLE_RATE,format:AUDIO_S16LSB as SDL_AudioFormat,channels:AUDIO_CHANNELS as u8,silence:0,samples:1024,padding:0,size:0,callback:None,userdata:std::ptr::null_mut()};
+        use sdl2::sys::{SDL_AudioSpec, SDL_AudioFormat, AUDIO_S16LSB, SDL_OpenAudioDevice, SDL_CloseAudioDevice};
+        let desired=SDL_AudioSpec{freq:AUDIO_SAMPLE_RATE,format:AUDIO_S16LSB as SDL_AudioFormat,channels:AUDIO_CHANNELS as u8,silence:0,samples:1024,padding:0,size:0,callback:core::option::Option::None,userdata:std::ptr::null_mut()};
         let mut obtained=desired;
         let id=unsafe{SDL_OpenAudioDevice(std::ptr::null(),0,&desired,&mut obtained,0)};
         if id==0{bail!("SDL could not open queued audio");}

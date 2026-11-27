@@ -15,7 +15,7 @@ pub(crate) fn configure(s:&crate::settings::Settings){TRIPLE.store(s.lab_triple_
 pub(crate) fn triple_enabled()->bool{TRIPLE.load(Ordering::Relaxed)}
 pub(crate) fn internal_enabled()->bool{INTERNAL.load(Ordering::Relaxed)}
 #[cfg(target_os="vita")]
-fn pin(mask:u32,label:&str){let r=unsafe{vitasdk_sys::sceKernelChangeThreadCpuAffinityMask(vitasdk_sys::sceKernelGetThreadId(),mask as i32)};crate::diagnostics::step(label,if r>=0{"OK"}else{"FAILED"});}
+fn pin(mask:u32,label:&'static str){let r=unsafe{vitasdk_sys::sceKernelChangeThreadCpuAffinityMask(vitasdk_sys::sceKernelGetThreadId(),mask as i32)};crate::diagnostics::step(label,if r>=0{"OK"}else{"FAILED"});}
 pub(crate) fn pin_render(){#[cfg(target_os="vita")]pin(vitasdk_sys::SCE_KERNEL_CPU_MASK_USER_0,"lab_render_affinity");}
 pub(crate) fn pin_input(){#[cfg(target_os="vita")]pin(vitasdk_sys::SCE_KERNEL_CPU_MASK_USER_0|vitasdk_sys::SCE_KERNEL_CPU_MASK_USER_2,"lab_raw_affinity");}
 pub(crate) fn pin_audio(){#[cfg(target_os="vita")]pin(vitasdk_sys::SCE_KERNEL_CPU_MASK_USER_2,"lab_audio_affinity");}
