@@ -96,7 +96,7 @@ fn settings_rows(app: &App) -> Vec<SettingsRow> {
     ));
     rows.push(SettingsRow::HudPage);
     rows.push(SettingsRow::HudOpacity);
-    rows.extend((0..4).map(SettingsRow::Lab));
+    rows.extend([1u8, 2].into_iter().map(SettingsRow::Lab));
     rows.push(SettingsRow::NativeDeadzone);
     rows.extend((0..16).map(SettingsRow::Control));
     rows.push(SettingsRow::ResetControls);
