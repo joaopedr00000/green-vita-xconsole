@@ -30,7 +30,7 @@ fn pack(mut b:Vec<bool>)->Vec<u8>{
 }
 // The last two VUI restriction fields are ue(reorder) and ue(buffer).
 // Without VUI/restrictions, the final syntax bit is their absent flag.
-pub(super) fn rewrite(nal:&[u8],has_vui:bool,restriction:Option<(u32,u32)>,refs:u32,zero_reorder:bool)->Option<Vec<u8>>{
+pub(crate) fn rewrite(nal:&[u8],has_vui:bool,restriction:Option<(u32,u32)>,refs:u32,zero_reorder:bool)->Option<Vec<u8>>{
     if nal.len()<5||nal.len()>4096||nal[0]&0x9f!=7||refs!=1||!zero_reorder{return None;}
     let rbsp=unescape(&nal[1..])?;
     let mut b=bits(&rbsp);
