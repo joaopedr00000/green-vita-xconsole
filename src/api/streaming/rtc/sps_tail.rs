@@ -59,7 +59,7 @@ pub(super) fn rewrite(nal:&[u8],has_vui:bool,restriction:Option<(u32,u32)>,refs:
 #[cfg(test)]mod tests{
     use super::*;
     #[test]fn preserves_prefix_and_limits_buffer(){
-        let mut b=vec![true,false,true,true,false];let prefix=b.clone();
+        let mut b=bits(&[0x42,0xe0,0x20]);b.extend([true,false,true,true,false]);let prefix=b.clone();
         b.extend(ue(0));b.extend(ue(7));
         let mut n=vec![0x67];n.extend(escape(&pack(b)));
         let p=rewrite(&n,true,Some((0,7)),1,true).unwrap();
