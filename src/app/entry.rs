@@ -13,27 +13,8 @@ impl App {
     pub(super) fn load_credentials(&mut self) {
         let mut auth = self.service.auth.clone();
         self.set_state(AppState::LoadingCredentials(tokio::spawn(async move {
-            let credentials = match auth.fetch_streaming_credentials().await {
-                Ok(credentials) => credentials,
-                Err(error) => {
-                    return Ok(CredentialsLoadResult {
-                        result: Err(error),
-                        auth,
-                    });
-                }
-            };
-            // Profile data is decorative and must not prevent sign-in.
-            let profile = match auth.fetch_xbox_profile().await {
-                Ok(profile) => Some(profile),
-                Err(error) => {
-                    eprintln!("Failed to fetch Xbox profile (avatar/gamertag): {error:#}");
-                    None
-                }
-            };
-            Ok(CredentialsLoadResult {
-                result: Ok((credentials, profile)),
-                auth,
-            })
+            let result=auth.fetch_streaming_credentials_and_profile().await;
+            Ok(CredentialsLoadResult{result,auth})
         })));
     }
 

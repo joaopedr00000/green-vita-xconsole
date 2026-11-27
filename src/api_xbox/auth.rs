@@ -77,7 +77,7 @@ impl DeviceCodeAuth {
 #[derive(Debug, Clone, Deserialize)]
 struct UserTokenResponse {
     access_token: String,
-    refresh_token: String,
+    refresh_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -314,7 +314,7 @@ impl MsalAuth {
                 "https://login.microsoftonline.com/consumers/oauth2/v2.0/token",
                 format!(
                     "grant_type=urn:ietf:params:oauth:grant-type:device_code&client_id={CLIENT_ID}&device_code={}",
-                    auth.device_code
+                    urlencode(&auth.device_code)
                 ),
                 "device code poll request",
             )
@@ -343,8 +343,49 @@ impl MsalAuth {
             .json()
             .await
             .context("failed to decode device code token response")?;
-        self.save_refresh_token(token.refresh_token);
+        let refresh=token.refresh_token.filter(|t|!t.is_empty()).context("device authorization did not return a refresh token")?;
+        self.save_refresh_token(refresh);
         Ok(DeviceCodePoll::Authorized)
+    }
+
+    // Retry only transient failures, using replayable in-memory request bodies.
+    async fn send_startup_request(
+        &self,request:reqwest::RequestBuilder,stage:&'static str,allow_retry:bool,
+    )->Result<reqwest::Response>{
+        use super::auth_retry::{retry_delay_ms,MAX_ATTEMPTS};
+        for attempt in 1..=MAX_ATTEMPTS{
+            let next=request.try_clone().context("could not clone authentication request")?;
+            match next.send().await{
+                Ok(response)=>{
+                    let status=response.status();
+                    if status.is_success(){
+                        if attempt>1{crate::diagnostics::step(stage,"RECOVERED");}
+                        return Ok(response);
+                    }
+                    let retry_after=response.headers().get(reqwest::header::RETRY_AFTER)
+                        .map(|value|value.to_str().unwrap_or("invalid"));
+                    if allow_retry && let Some(ms)=retry_delay_ms(attempt,Some(status.as_u16()),retry_after){
+                        crate::diagnostics::step(stage,"RETRY_HTTP");
+                        drop(response);
+                        tokio::time::sleep(Duration::from_millis(ms)).await;
+                        continue;
+                    }
+                    crate::diagnostics::failure(stage,&status.as_u16().to_string());
+                    return Ok(response);
+                }
+                Err(error)=>{
+                    if allow_retry && (error.is_timeout()||error.is_connect())
+                        && let Some(ms)=retry_delay_ms(attempt,None,None){
+                        crate::diagnostics::step(stage,"RETRY_TRANSPORT");
+                        tokio::time::sleep(Duration::from_millis(ms)).await;
+                        continue;
+                    }
+                    crate::diagnostics::step(stage,if error.is_timeout(){"TIMEOUT"}else{"TRANSPORT_FAILED"});
+                    return Err(error.without_url()).context("authentication request failed");
+                }
+            }
+        }
+        unreachable!("bounded authentication retry always returns on final attempt")
     }
 
     async fn refresh_user_token(&mut self) -> Result<String> {
@@ -352,16 +393,10 @@ impl MsalAuth {
             bail!("no saved xCloud login to refresh");
         };
 
-        let response = self
-            .post_form(
-                "https://login.microsoftonline.com/consumers/oauth2/v2.0/token",
-                format!(
-                "client_id={CLIENT_ID}&grant_type=refresh_token&refresh_token={refresh_token}&scope={}",
-                urlencode(OAUTH_SCOPE)
-            ),
-                "token refresh request",
-            )
-            .await?;
+        let request=self.client.post("https://login.microsoftonline.com/consumers/oauth2/v2.0/token")
+            .header("Content-Type","application/x-www-form-urlencoded")
+            .body(format!("client_id={CLIENT_ID}&grant_type=refresh_token&refresh_token={}&scope={}",urlencode(&refresh_token),urlencode(OAUTH_SCOPE)));
+        let response=self.send_startup_request(request,"auth_refresh",true).await.context("token refresh request failed")?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -375,6 +410,7 @@ impl MsalAuth {
                 .as_ref()
                 .is_some_and(|error| error.error == "invalid_grant")
             {
+                crate::diagnostics::step("auth_refresh","INVALID_GRANT");
                 self.clear_saved_login();
                 bail!("saved xCloud login expired; please sign in again (invalid_grant)");
             }
@@ -387,7 +423,10 @@ impl MsalAuth {
             .await
             .context("failed to decode token refresh response")?;
 
-        self.save_refresh_token(token.refresh_token.clone());
+        if token.access_token.is_empty(){bail!("token refresh returned an empty access token");}
+        if let Some(next)=token.refresh_token.filter(|t|!t.is_empty()){
+            if self.refresh_token.as_deref()!=Some(next.as_str()){self.save_refresh_token(next);}
+        }
         Ok(token.access_token)
     }
 
@@ -401,7 +440,7 @@ impl MsalAuth {
             .post_form(
                 "https://login.live.com/oauth20_token.srf",
                 format!(
-                    "client_id={CLIENT_ID}&scope=service::http://Passport.NET/purpose::PURPOSE_XBOX_CLOUD_CONSOLE_TRANSFER_TOKEN&grant_type=refresh_token&refresh_token={refresh_token}"
+                    "client_id={CLIENT_ID}&scope=service::http://Passport.NET/purpose::PURPOSE_XBOX_CLOUD_CONSOLE_TRANSFER_TOKEN&grant_type=refresh_token&refresh_token={}",urlencode(&refresh_token)
                 ),
                 "passport token request",
             )
@@ -429,10 +468,17 @@ impl MsalAuth {
         for (key, value) in headers {
             request = request.header(*key, *value);
         }
-        let response = request
-            .send()
-            .await
-            .with_context(|| format!("{context_label} request failed"))?;
+        let (stage,retry)=match context_label{
+            "XSTS user authentication"=>("auth_xbox_user",true),
+            "XSTS authorize"=>("auth_xsts",true),
+            "streaming token (offering xhome)"=>("auth_xhome",true),
+            "streaming token (offering xgpuweb)"=>("auth_cloud",true),
+            "streaming token (offering xgpuwebf2p)"=>("auth_f2p",false),
+            "streaming token (offering xgpuconsole)"=>("auth_console_optional",false),
+            _=>("auth_exchange",false),
+        };
+        let response=self.send_startup_request(request,stage,retry).await
+            .with_context(||format!("{context_label} request failed"))?;
         let status = response.status();
         if !status.is_success() {
             bail!("{context_label} rejected with {status}");
@@ -517,11 +563,23 @@ impl MsalAuth {
         response.into_credentials()
     }
 
-    pub async fn fetch_streaming_credentials(&mut self) -> Result<StreamingCredentials> {
-        let access_token = self.refresh_user_token().await?;
-        let web_token = self.xsts_user_authenticate(&access_token).await?;
+    pub async fn fetch_streaming_credentials_and_profile(&mut self) -> Result<(StreamingCredentials,Option<XboxProfile>)> {
+        let access_token=self.refresh_user_token().await?;
+        let web_token=self.xsts_user_authenticate(&access_token).await?;
+        let credentials=self.fetch_streaming_credentials_with_user_token(&web_token).await?;
+        // Reuse the Xbox user token rather than rotating the Microsoft refresh
+        // token again for decorative profile information.
+        let profile=match self.fetch_xbox_profile_with_user_token(&web_token).await{
+            Ok(profile)=>Some(profile),
+            Err(error)=>{crate::diagnostics::failure("auth_profile",&format!("{error:#}"));None}
+        };
+        crate::diagnostics::step("authentication","READY");
+        Ok((credentials,profile))
+    }
+
+    async fn fetch_streaming_credentials_with_user_token(&self,web_token:&str) -> Result<StreamingCredentials> {
         let gssv_token = self
-            .xsts_authorize(&web_token, "http://gssv.xboxlive.com/")
+            .xsts_authorize(web_token, "http://gssv.xboxlive.com/")
             .await?
             .token;
 
@@ -563,11 +621,9 @@ impl MsalAuth {
     }
 
     /// Gamertag + avatar URL, via a separate XSTS authorization for Xbox Live's own profile API.
-    pub async fn fetch_xbox_profile(&mut self) -> Result<XboxProfile> {
-        let access_token = self.refresh_user_token().await?;
-        let web_token = self.xsts_user_authenticate(&access_token).await?;
+    async fn fetch_xbox_profile_with_user_token(&self,web_token:&str) -> Result<XboxProfile> {
         let xbl = self
-            .xsts_authorize(&web_token, "http://xboxlive.com")
+            .xsts_authorize(web_token, "http://xboxlive.com")
             .await?;
         // The "user hash" half of an `XBL3.0 x=<uhs>;<token>` Authorization header.
         let uhs = xbl
@@ -832,12 +888,20 @@ fn decode_hex_digit(digit: u8) -> Result<u8> {
 }
 
 fn urlencode(value: &str) -> String {
-    value.replace(' ', "%20")
+    use std::fmt::Write;
+    let mut encoded=String::with_capacity(value.len());
+    for byte in value.bytes(){
+        if byte.is_ascii_alphanumeric()||matches!(byte,b'-'|b'_'|b'.'|b'~'){encoded.push(char::from(byte));}
+        else{let _=write!(&mut encoded,"%{byte:02X}");}
+    }
+    encoded
 }
 
 #[cfg(test)]
 mod vault_crypto_tests {
     use super::*;
+    #[test]
+    fn form_values_are_escaped(){assert_eq!(urlencode("a+b&c=% d"),"a%2Bb%26c%3D%25%20d");}
     #[test]
     fn algorithms_roundtrip_and_reject_modified_data() {
         for version in [1,2] {
