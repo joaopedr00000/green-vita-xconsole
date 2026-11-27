@@ -123,10 +123,32 @@ impl VitaSurface {
         if advertised.contains(&PixelFormatEnum::IYUV){formats.push((PixelFormatEnum::IYUV,VideoPixelFormat::Iyuv));}
         let mut chosen=None;
         for (pixel,format) in formats{
+            // SDL2's Vita GXM driver programs the YUV profile in UpdateTexture,
+            // not LockTexture. Our zero-copy decoder normally never calls
+            // UpdateTexture, so prime the hardware color matrix once before
+            // registering the texture addresses. No copies in the frame loop.
+            let yuv=matches!(format,VideoPixelFormat::Nv12|VideoPixelFormat::Iyuv);
+            let neutral=if yuv{
+                if width%2!=0 || height%2!=0{continue;}
+                unsafe{sdl2::sys::SDL_SetYUVConversionMode(sdl2::sys::SDL_YUV_CONVERSION_MODE::SDL_YUV_CONVERSION_BT709);}
+                let luma=(width as usize)*(height as usize);
+                let mut pixels=vec![128u8;luma+luma/2];
+                pixels[..luma].fill(16);
+                Some(pixels)
+            }else{None};
             let mut textures=Vec::new();let mut targets=Vec::new();
             let count=if streaming_lab_triple(){3}else{2};
             for _ in 0..count{
                 let Ok(mut texture)=self.canvas.create_texture_streaming(pixel,width,height)else{break;};
+                if let Some(pixels)=neutral.as_ref(){
+                    // Full-size initialization uses the public SDL update path
+                    // while the texture is still exclusively owned by this thread.
+                    if texture.update(None,pixels,width as usize).is_err(){
+                        crate::diagnostics::step("lab_yuv_profile","INIT_FAILED");
+                        unsafe{texture.destroy();}
+                        break;
+                    }
+                }
                 let target=texture.with_lock(None,|pixels,pitch|{
                     let valid=if format==VideoPixelFormat::Bgr565{pitch>=width as usize*2 && pixels.len()>=pitch*height as usize}
                     else{width%2==0 && height%2==0 && pitch==width as usize && pixels.len()>=pitch*height as usize*3/2};
@@ -139,7 +161,7 @@ impl VitaSurface {
             for texture in textures{unsafe{texture.destroy();}}
         }
         let (textures,targets,format)=chosen.context("no compatible SDL video texture layout")?;
-        if matches!(format,VideoPixelFormat::Nv12|VideoPixelFormat::Iyuv){unsafe{sdl2::sys::SDL_SetYUVConversionMode(sdl2::sys::SDL_YUV_CONVERSION_MODE::SDL_YUV_CONVERSION_BT709);}}
+        if matches!(format,VideoPixelFormat::Nv12|VideoPixelFormat::Iyuv){crate::diagnostics::step("lab_yuv_profile","BT709_UPDATE_PRIMED");}
         crate::experimental::record_texture(textures.len(),format);
         crate::diagnostics::step("lab_texture",if textures.len()==3{"TRIPLE"}else{"DOUBLE"});
         output.set_targets(targets);
