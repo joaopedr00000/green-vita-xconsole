@@ -78,7 +78,7 @@ impl Drop for AvcdecDecoder {
     }
 }
 
-pub struct HwVideoDecoder {
+pub struct PublicDecoder {
     decoder: AvcdecDecoder,
     _frame_memory: CdramBlock,
     _library: AvcdecLibrary,
@@ -86,7 +86,7 @@ pub struct HwVideoDecoder {
     height: u32,
 }
 
-impl HwVideoDecoder {
+impl PublicDecoder {
     pub fn new(config: DecoderConfig) -> Result<Self> {
         unsafe {
             let library = AvcdecLibrary::initialize(config.decode_width, config.decode_height)?;
@@ -137,16 +137,17 @@ impl HwVideoDecoder {
         &mut self,
         access_unit: &[u8],
         direct_target: VideoTextureTarget,
-    ) -> Result<bool> {
+        input_pts:u64,
+    ) -> Result<Option<u64>> {
         unsafe {
             let au = SceAvcdecAu {
                 pts: SceVideodecTimeStamp {
-                    upper: 0xFFFFFFFF,
-                    lower: 0xFFFFFFFF,
+                    upper: (input_pts >> 32) as u32,
+                    lower: input_pts as u32,
                 },
                 dts: SceVideodecTimeStamp {
-                    upper: 0xFFFFFFFF,
-                    lower: 0xFFFFFFFF,
+                    upper: (input_pts >> 32) as u32,
+                    lower: input_pts as u32,
                 },
                 es: SceAvcdecBuf {
                     pBuf: access_unit.as_ptr() as *mut c_void,
@@ -203,7 +204,7 @@ impl HwVideoDecoder {
                 bail!("sceAvcdecDecode failed: {ret:#x}");
             }
             if array_picture.numOfOutput == 0 {
-                return Ok(false);
+                return Ok(None);
             }
 
             // `framePitch` is in pixels. Validate the complete byte size before trusting the
@@ -224,11 +225,65 @@ impl HwVideoDecoder {
                     output_capacity
                 );
             }
-            Ok(true)
+            Ok(Some(((picture.info.pts.upper as u64)<<32)|picture.info.pts.lower as u64))
         }
     }
 }
 
 // SAFETY: the CDRAM blocks and decoder handle have no thread affinity in the underlying SCE API -
 // this is only ever moved once (into `VideoDecodeWorker`'s thread), never accessed concurrently.
-unsafe impl Send for HwVideoDecoder {}
+unsafe impl Send for PublicDecoder {}
+
+use std::time::Instant;
+use crate::streaming::hud::DecodeStages;
+use super::{decoder_internal,timing::Pending};
+#[derive(Clone,Copy)]
+pub(super) struct FrameTiming{pub enqueued:Instant,pub stages:DecodeStages,pub generation:u64}
+enum Backend{Public(PublicDecoder),Internal(decoder_internal::HwVideoDecoder)}
+pub struct HwVideoDecoder{backend:Backend,pending:Pending<(FrameTiming,Instant)>,seq:u64,no_output:u8}
+impl HwVideoDecoder{
+    pub fn new(config:DecoderConfig)->Result<Self>{
+        if crate::experimental::internal_enabled(){
+            match decoder_internal::HwVideoDecoder::new(config){
+                Ok(d)=>{crate::diagnostics::step("lab_decoder","INTERNAL_LOW_DELAY");crate::experimental::record_decoder(true);return Ok(Self{backend:Backend::Internal(d),pending:Pending::new(),seq:0,no_output:0});}
+                Err(e)=>{crate::diagnostics::failure("lab_decoder",&format!("{e:#}"));crate::experimental::disable_internal();}
+            }
+        }
+        crate::experimental::record_decoder(false);
+        crate::diagnostics::step("lab_decoder","PUBLIC");
+        Ok(Self{backend:Backend::Public(PublicDecoder::new(config)?),pending:Pending::new(),seq:0,no_output:0})
+    }
+    pub fn is_internal(&self)->bool{matches!(self.backend,Backend::Internal(_))}
+    pub fn decode(&mut self,data:&[u8],target:VideoTextureTarget,mut timing:FrameTiming)->Result<Option<FrameTiming>>{
+        self.seq=self.seq.saturating_add(1);
+        let pts=self.seq.saturating_mul(super::AU_PTS_STEP);
+        let started=Instant::now();
+        let (returned,read_us)=match &mut self.backend{
+            Backend::Public(d)=>{
+                let returned=d.decode(data,target,pts)?;
+                timing.stages.decode_us=started.elapsed().as_micros() as u64;
+                self.pending.push(pts,(timing,started));(returned,0)
+            }
+            Backend::Internal(d)=>{
+                d.submit_access_unit(data)?;
+                debug_assert_eq!(d.submitted_sequence(),self.seq);
+                timing.stages.decode_us=started.elapsed().as_micros() as u64;
+                self.pending.push(pts,(timing,started));
+                let read=Instant::now();let returned=d.get_picture(target)?;
+                (returned,read.elapsed().as_micros() as u64)
+            }
+        };
+        let Some(id)=returned else{
+            self.no_output=self.no_output.saturating_add(1);
+            if self.is_internal()&&self.no_output>=24{bail!("internal AVCDEC: 24 submissions without output");}return Ok(None);
+        };
+        self.no_output=0;
+        if let Some((mut original,submitted))=self.pending.take(id){
+            original.stages.verified=true;original.stages.decoder_age_us=submitted.elapsed().as_micros() as u64;
+            original.stages.decode_us=original.stages.decode_us.saturating_add(read_us);
+            original.stages.decoder_pending=self.pending.len() as u32;Ok(Some(original))
+        }else{
+            timing.stages.verified=false;timing.stages.decoder_pending=self.pending.len() as u32;Ok(Some(timing))
+        }
+    }
+}

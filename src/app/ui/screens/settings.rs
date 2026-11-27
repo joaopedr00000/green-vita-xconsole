@@ -96,7 +96,7 @@ fn settings_rows(app: &App) -> Vec<SettingsRow> {
     ));
     rows.push(SettingsRow::HudPage);
     rows.push(SettingsRow::HudOpacity);
-    rows.extend((0..3).map(SettingsRow::Lab));
+    rows.extend((0..4).map(SettingsRow::Lab));
     rows.push(SettingsRow::NativeDeadzone);
     rows.extend((0..16).map(SettingsRow::Control));
     rows.push(SettingsRow::ResetControls);
@@ -323,7 +323,8 @@ pub(crate) fn show(ctx: &egui::Context, app: &App, commands: &mut Vec<AppCommand
                 let values=[app.settings.lab_triple_buffer,app.settings.lab_performance_clocks];
                 for (i,label) in labels.into_iter().enumerate(){if checkbox_row(ui,selected_index==row_index,values[i],label.to_owned()){commands.push(Command::ToggleLab(i as u8).into());}row_index+=1;}
                 if focus_row(ui,selected_index==row_index,format!("{}: {}% >",if pt{"Ganho de áudio"}else{"Audio gain"},app.settings.lab_audio_gain_percent.clamp(100,150))){commands.push(Command::ToggleLab(2).into());}row_index+=1;
-                ui.small(if pt{"Reconecte após alterar o número de texturas. Frequências opcionais podem aumentar o consumo."}else{"Reconnect after changing the texture count. Optional clocks may increase power use."});
+                if checkbox_row(ui,selected_index==row_index,app.settings.lab_low_delay_test,if pt{"Decoder Low Delay (experimental)".into()}else{"Low Delay decoder (experimental)".into()}){commands.push(Command::ToggleLab(3).into());}row_index+=1;
+                ui.small(if pt{"Reconecte após alterar decoder ou texturas. Low Delay é experimental; pode retornar ao público em caso de falha."}else{"Reconnect after changing decoder or textures. Low Delay is experimental; errors may fall back to public."});
                 ui.separator();
                 ui.heading(if pt { "Mapeamento dos controles" } else { "Controller mapping" });
                 ui.small(if pt{"Gamepad RAW: automático no Vita; SDL2 para compatibilidade."}else{"RAW gamepad: automatic on Vita; SDL2 compatibility fallback."});
@@ -633,7 +634,7 @@ impl App {
                 self.settings.save();
             }
             Command::ToggleLab(i)=>{
-                match i{0=>self.settings.lab_triple_buffer=!self.settings.lab_triple_buffer,1=>self.settings.lab_performance_clocks=!self.settings.lab_performance_clocks,2=>self.settings.lab_audio_gain_percent=match self.settings.lab_audio_gain_percent{100=>125,125=>150,_=>100},_=>{}}
+                match i{0=>self.settings.lab_triple_buffer=!self.settings.lab_triple_buffer,1=>self.settings.lab_performance_clocks=!self.settings.lab_performance_clocks,2=>self.settings.lab_audio_gain_percent=match self.settings.lab_audio_gain_percent{100=>125,125=>150,_=>100},3=>self.settings.lab_low_delay_test=!self.settings.lab_low_delay_test,_=>{}}
                 crate::experimental::configure(&self.settings);self.settings.save();
             }
             Command::CycleNativeDeadzone => {
