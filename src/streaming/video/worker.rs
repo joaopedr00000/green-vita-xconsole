@@ -18,6 +18,7 @@ struct QueuedAccessUnit {
     source_duration_us:Option<u64>,
     clean_idr:bool,
     rtp_timestamp:u32,nal_mask:u32,
+    encoded_size:Option<(u32,u32)>,
     generation: u64,
 }
 
@@ -84,7 +85,7 @@ impl VideoDecodeWorker {
         })
     }
 
-    pub fn submit_access_unit(&self, data: Vec<u8>, source_frame_duration_us: Option<u64>,clean_idr:bool,rtp_timestamp:u32,nal_mask:u32) -> bool {
+    pub fn submit_access_unit(&self, data: Vec<u8>, source_frame_duration_us: Option<u64>,clean_idr:bool,rtp_timestamp:u32,nal_mask:u32,encoded_size:Option<(u32,u32)>) -> bool {
         let generation=self.generation.load(Ordering::Acquire);
         let primed=self.primed_generation.load(Ordering::Acquire)==generation;
         let pending_limit=super::timing::queue_limit(source_frame_duration_us,primed,clean_idr);
@@ -97,7 +98,7 @@ impl VideoDecodeWorker {
             data,
             queued_at: Instant::now(),
             source_duration_us:source_frame_duration_us,
-            clean_idr,rtp_timestamp,nal_mask,
+            clean_idr,rtp_timestamp,nal_mask,encoded_size,
             generation,
         };
         match self.access_units.try_send(access_unit) {
@@ -161,6 +162,7 @@ fn run_decode_loop(
     direct_output: Arc<DirectVideoOutput>,
 ) {
     let mut decoder = Some(initial_decoder);
+    let mut active_config=config;
 
     loop {
         select_biased! {
@@ -176,7 +178,7 @@ fn run_decode_loop(
                 metrics::QUEUE_DEPTH.store(access_units.len() as u64,Ordering::Relaxed);
                 decode_queued_access_unit(
                     &mut decoder,
-                    config,
+                    &mut active_config,
                     &generation,
                     &primed_generation,
                     &latest_result,
@@ -192,7 +194,7 @@ fn run_decode_loop(
 
 fn decode_queued_access_unit(
     decoder: &mut Option<HwVideoDecoder>,
-    config: DecoderConfig,
+    config: &mut DecoderConfig,
     generation: &AtomicU64,
     primed_generation:&AtomicU64,
     latest_result: &Mutex<Option<DecodeResult>>,
@@ -216,6 +218,20 @@ fn decode_queued_access_unit(
     };
     let texture_acquired_at=Instant::now();
     if access_unit.generation != generation.load(Ordering::Acquire) {return;}
+    // Only change dimensions at a self-contained IDR. Keep maximum 720p
+    // configuration for any other accepted size; do not repeat failed native
+    // attempts at every keyframe.
+    if access_unit.clean_idr {
+        if let Some((w,h))=access_unit.encoded_size {
+            let desired=if (w,h)==(super::REQUEST_WIDTH,super::REQUEST_HEIGHT){(w,h)}else{(super::STREAM_WIDTH,super::STREAM_HEIGHT)};
+            if (config.decode_width,config.decode_height)!=desired {
+                *decoder=None;
+                config.decode_width=desired.0;config.decode_height=desired.1;
+                primed_generation.store(u64::MAX,Ordering::Release);
+                crate::diagnostics::step("decoder_resolution","CLEAN_IDR_SIZE_CHANGE");
+            }
+        }
+    }
     // Only recreate for real resync, not for speculative latency recovery.
     if access_unit.clean_idr &&
         decoder.as_ref().is_some_and(|d|d.generation_changed(access_unit.generation)){
@@ -223,7 +239,13 @@ fn decode_queued_access_unit(
         *decoder=None;
     }
     if decoder.is_none() {
-        match HwVideoDecoder::new(config) {
+        if !access_unit.clean_idr {return;}
+        let result=HwVideoDecoder::new(*config).or_else(|e|{
+            if (config.decode_width,config.decode_height)==(super::STREAM_WIDTH,super::STREAM_HEIGHT){return Err(e);}
+            crate::diagnostics::step("decoder_resolution","NATIVE_INIT_FAILED_720P_FALLBACK");
+            HwVideoDecoder::new(DecoderConfig{decode_width:super::STREAM_WIDTH,decode_height:super::STREAM_HEIGHT,..*config})
+        });
+        match result {
             Ok(new_decoder) => *decoder = Some(new_decoder),
             Err(error) => {
                 publish_result(

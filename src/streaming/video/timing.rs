@@ -113,3 +113,9 @@ pub(crate) fn has_vcl(mask:u32)->bool{mask&((0b11111<<1)|(0b111<<19))!=0}
     }
     #[test]fn nal_classification(){assert!(!has_vcl((1<<7)|(1<<8)));assert!(has_vcl(1<<5));assert!(has_vcl(1<<1));}
 }
+
+#[derive(Default)]pub(crate) struct CallClass{pub n:u64,pub sum:u64,pub max:u64,pub slow:u64}
+impl CallClass{fn record(&mut self,us:u64){self.n+=1;self.sum=self.sum.saturating_add(us);self.max=self.max.max(us);if us>16_000{self.slow+=1;}}pub fn avg(&self)->u64{self.sum/self.n.max(1)}}
+#[derive(Default)]pub(crate) struct CallStats{pub picture:CallClass,pub empty:CallClass}
+impl CallStats{pub fn record(&mut self,picture:bool,us:u64){if picture{self.picture.record(us)}else{self.empty.record(us)}}}
+#[cfg(test)]#[test]fn call_classes_are_independent(){let mut s=CallStats::default();s.record(true,2000);s.record(true,3000);s.record(false,18000);assert_eq!(s.picture.avg(),2500);assert_eq!(s.picture.max,3000);assert_eq!(s.picture.slow,0);assert_eq!(s.empty.avg(),18000);assert_eq!(s.empty.slow,1);}

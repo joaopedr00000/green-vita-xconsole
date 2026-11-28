@@ -1,4 +1,4 @@
-name: Build GreenVita 0.3.5 Beta 2 cadence experiment
+name: Build GreenVita 0.3.5 Beta 3 native resolution experiment
 on:
   push:
     branches: [vita-v0.3.5-cadence-lab]
@@ -32,11 +32,11 @@ jobs:
       - name: Compile candidate VPK
         env:
           RUSTFLAGS: "-C target-feature=-neon"
-          GREEN_VITA_BUILD: "352"
+          GREEN_VITA_BUILD: "353"
         run: cargo vita build vpk --release
       - name: Upload test package
         uses: actions/upload-artifact@v4
         with:
-          name: GreenVita-0.3.5-Beta2
+          name: GreenVita-0.3.5-Beta3
           path: target/armv7-sony-vita-newlibeabihf/release/green-vita.vpk
           if-no-files-found: error

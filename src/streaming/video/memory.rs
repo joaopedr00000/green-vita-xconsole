@@ -76,6 +76,18 @@ pub(super) struct CdramBlock {
 }
 
 impl CdramBlock {
+    /// Physically contiguous non-cached main memory, as used by Moonlight.
+    pub(super) fn allocate_phycont(name:&str,size:u32)->Result<Self>{
+        let c_name=CString::new(name).expect("static name");
+        let capacity=size.checked_add(0xFFFFF).ok_or_else(||anyhow::anyhow!("decoder memory size overflow"))?&!0xFFFFF;
+        if capacity==0{bail!("zero decoder memory");}
+        let uid=unsafe{sceKernelAllocMemBlock(c_name.as_ptr(),SCE_KERNEL_MEMBLOCK_TYPE_USER_MAIN_PHYCONT_NC_RW,capacity,std::ptr::null_mut())};
+        if uid<0{bail!("PHYCONT decoder allocation failed: {uid:#x}; {}",free_memory_summary());}
+        let mut base:*mut c_void=std::ptr::null_mut();
+        let ret=unsafe{sceKernelGetMemBlockBase(uid,&mut base)};
+        if ret<0||base.is_null(){unsafe{sceKernelFreeMemBlock(uid);};bail!("PHYCONT decoder base failed: {ret:#x}");}
+        Ok(Self{uid,ptr:base.cast(),capacity})
+    }
     pub(super) fn allocate(name: &str, size: u32) -> Result<Self> {
         Self::allocate_with_alignments(name,size,BLOCK_ALIGNMENT,BLOCK_ALIGNMENT)
     }

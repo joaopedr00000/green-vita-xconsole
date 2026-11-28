@@ -7,7 +7,7 @@ use vitasdk_sys::*;
 
 // The idea of reducing the reference frames came from MattKC on his Vanilla project
 // Make sure to check it out, good content :)
-const AVCDEC_NUM_REF_FRAMES: u32 = 1;
+const AVCDEC_NUM_REF_FRAMES: u32 = super::AVCDEC_NUM_REF_FRAMES;
 // AVCDEC and SDL's Vita GXM renderer both support RGB565 natively. At 960x544 this halves the
 // decoder-to-texture traffic from roughly 2 MiB to 1 MiB per frame, which matters at 60 FPS.
 const OUTPUT_BYTES_PER_PIXEL: u32 = 2;
@@ -18,7 +18,7 @@ struct AvcdecLibrary {
 }
 
 impl AvcdecLibrary {
-    fn initialize(width: u32, height: u32) -> Result<Self> {
+    fn initialize(width: u32, height: u32, refs:u32) -> Result<Self> {
         let module_loaded = unsafe {
             let loaded_before = sceSysmoduleIsLoaded(SCE_SYSMODULE_AVCDEC);
             let ret = sceSysmoduleLoadModule(SCE_SYSMODULE_AVCDEC);
@@ -40,7 +40,7 @@ impl AvcdecLibrary {
             size: size_of::<SceVideodecQueryInitInfoHwAvcdec>() as u32,
             horizontal: width,
             vertical: height,
-            numOfRefFrames: AVCDEC_NUM_REF_FRAMES,
+            numOfRefFrames: refs,
             numOfStreams: 1,
         };
         let ret = unsafe { sceVideodecInitLibrary(SCE_VIDEODEC_TYPE_HW_AVCDEC, &init_info) };
@@ -88,14 +88,29 @@ pub struct PublicDecoder {
 }
 
 impl PublicDecoder {
-    pub fn new(config: DecoderConfig) -> Result<Self> {
+    pub fn new(config:DecoderConfig)->Result<Self>{
+        release_reserved_decoder_cdram();
+        let mut last=None;
+        for (refs,phy) in [(AVCDEC_NUM_REF_FRAMES,true),(AVCDEC_NUM_REF_FRAMES,false),(1,true),(1,false)]{
+            match Self::try_new(config,refs,phy){
+                Ok(d)=>return Ok(d),
+                Err(e)=>{
+                    eprintln!("AVCDEC initialization refs={refs} phycont={phy}: {e:#}");
+                    crate::diagnostics::decoder_allocation_attempt(refs,phy,false,0);
+                    last=Some(e);
+                }
+            }
+        }
+        Err(last.expect("four attempts"))
+    }
+    fn try_new(config: DecoderConfig,refs:u32,phy:bool) -> Result<Self> {
         unsafe {
-            let library = AvcdecLibrary::initialize(config.decode_width, config.decode_height)?;
+            let library = AvcdecLibrary::initialize(config.decode_width, config.decode_height,refs)?;
 
             let query = SceAvcdecQueryDecoderInfo {
                 horizontal: config.decode_width,
                 vertical: config.decode_height,
-                numOfRefFrames: AVCDEC_NUM_REF_FRAMES,
+                numOfRefFrames: refs,
             };
             let mut decoder_info = SceAvcdecDecoderInfo { frameMemSize: 0 };
             let ret = sceAvcdecQueryDecoderMemSize(
@@ -106,14 +121,14 @@ impl PublicDecoder {
             if ret < 0 {
                 bail!("sceAvcdecQueryDecoderMemSize failed: {ret:#x}");
             }
-            release_reserved_decoder_cdram();
-            let frame_memory =
-                CdramBlock::allocate("xcloud_hw_video_frame", decoder_info.frameMemSize)?;
+            if decoder_info.frameMemSize==0{bail!("AVCDEC returned zero frame memory");}
+            let frame_memory=if phy{CdramBlock::allocate_phycont("xcloud_hw_video_phy",decoder_info.frameMemSize)?}
+                else{CdramBlock::allocate("xcloud_hw_video_frame",decoder_info.frameMemSize)?};
             let mut decoder_control = SceAvcdecCtrl {
                 handle: 0,
                 frameBuf: SceAvcdecBuf {
                     pBuf: frame_memory.ptr.cast(),
-                    size: decoder_info.frameMemSize,
+                    size: if phy{frame_memory.capacity()}else{decoder_info.frameMemSize},
                 },
             };
             let ret =
@@ -122,6 +137,8 @@ impl PublicDecoder {
                 bail!("sceAvcdecCreateDecoder failed: {ret:#x}");
             }
             let decoder = AvcdecDecoder(decoder_control);
+            crate::diagnostics::decoder_allocation_attempt(refs,phy,true,frame_memory.capacity());
+            crate::diagnostics::decoder_config_info(config.decode_width,config.decode_height,config.output_width,config.output_height,refs,phy);
 
             Ok(Self {
                 decoder,
@@ -252,6 +269,8 @@ pub(super) struct FrameTiming{pub enqueued:Instant,pub stages:DecodeStages,pub g
 
 pub struct HwVideoDecoder {
     backend: PublicDecoder,
+    decode_size:(u32,u32),
+    calls_by_result:super::timing::CallStats,
     pending: Pending<(FrameTiming,Instant,u64)>,
     clock:PtsClock,period_us:u64,over_budget:u64,last_submit:Option<Instant>,empty_vcl:u64,empty_other:u64,
     seq:u64, outputs:u64, empty:u64, no_output:u32, peak_no_output:u32, peak_pending:usize,
@@ -263,12 +282,12 @@ impl HwVideoDecoder {
     pub fn new(config:DecoderConfig)->Result<Self>{
         let backend=PublicDecoder::new(config)?;
         crate::diagnostics::step("lab_decoder","PUBLIC");
-        crate::diagnostics::decoder_config_info(config.decode_width,config.decode_height,config.output_width,config.output_height);
-        Ok(Self{backend,pending:Pending::new(),clock:PtsClock::default(),period_us:0,over_budget:0,last_submit:None,empty_vcl:0,empty_other:0,seq:0,outputs:0,empty:0,no_output:0,peak_no_output:0,peak_pending:0,
+        Ok(Self{backend,decode_size:(config.decode_width,config.decode_height),calls_by_result:Default::default(),pending:Pending::new(),clock:PtsClock::default(),period_us:0,over_budget:0,last_submit:None,empty_vcl:0,empty_other:0,seq:0,outputs:0,empty:0,no_output:0,peak_no_output:0,peak_pending:0,
             call_total_us:0,call_max_us:0,frame_lag_sum:0,frame_lag_max:0,matched:0,wait_sum_us:0,
             started:Instant::now(),last_report:Instant::now(),last_generation:None,last_lag:None,
             ever_output:false})
     }
+    pub(super) fn decode_size(&self)->(u32,u32){self.decode_size}
     pub(super) fn generation_changed(&self,generation:u64)->bool{self.last_generation.is_some_and(|g|g!=generation)}
     pub fn decode(&mut self,data:&mut Vec<u8>,target:VideoTextureTarget,mut timing:FrameTiming,rtp_timestamp:u32,period:Option<u64>,nal_mask:u32)->Result<Option<FrameTiming>>{
         self.last_generation=Some(timing.generation);
@@ -280,6 +299,7 @@ impl HwVideoDecoder {
         let bytes=data.len();
         let returned=self.backend.decode(data,target,pts)?;
         let call_us=started.elapsed().as_micros() as u64;
+        self.calls_by_result.record(returned.is_some(),call_us);
         timing.stages.decode_us=call_us;
         self.pending.push(pts,(timing,started,self.seq));
         self.call_total_us=self.call_total_us.saturating_add(call_us);
@@ -330,6 +350,8 @@ impl HwVideoDecoder {
             });
             crate::diagnostics::decoder_buffer_info(self.outputs,self.empty,self.peak_no_output,self.pending.len(),self.peak_pending,self.call_total_us/calls.max(1),self.call_max_us,lag_x100,self.frame_lag_max);
             crate::diagnostics::decoder_cadence_window(self.period_us,self.over_budget,self.matched,self.empty_vcl,self.empty_other);
+            crate::diagnostics::decoder_calls_by_result(&self.calls_by_result);
+            self.calls_by_result=Default::default();
             self.over_budget=0;self.empty_vcl=0;self.empty_other=0;
             self.last_report=Instant::now();self.outputs=0;self.empty=0;self.peak_no_output=self.no_output;
             self.peak_pending=self.pending.len();self.call_total_us=0;self.call_max_us=0;

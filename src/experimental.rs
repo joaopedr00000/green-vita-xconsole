@@ -18,7 +18,10 @@ impl PerformanceMode{
         #[cfg(target_os="vita")]{
             use vitasdk_sys::*;
             let old=unsafe{[scePowerGetArmClockFrequency(),scePowerGetBusClockFrequency(),scePowerGetGpuClockFrequency(),scePowerGetGpuXbarClockFrequency()]};
-            apply([444,222,222,166]);Self{old}
+            apply([444,222,222,166]);
+            let actual=unsafe{[scePowerGetArmClockFrequency(),scePowerGetBusClockFrequency(),scePowerGetGpuClockFrequency(),scePowerGetGpuXbarClockFrequency()]};
+            crate::diagnostics::decoder_clocks(actual);
+            Self{old}
         }
         #[cfg(not(target_os="vita"))]Self{}
     }
@@ -32,4 +35,4 @@ impl Drop for PerformanceMode{fn drop(&mut self){#[cfg(target_os="vita")]apply(s
 
 pub(crate) fn decoder_name()->&'static str{"Public"}
 
-pub(crate) fn build_id()->&'static str{option_env!("GREEN_VITA_BUILD").unwrap_or("352-local")}
+pub(crate) fn build_id()->&'static str{option_env!("GREEN_VITA_BUILD").unwrap_or("353-local")}

@@ -80,6 +80,7 @@ pub(super) struct VideoRtp {
     damage_score: u8,
     cadence:crate::streaming::video::timing::Cadence,
     needs_clean_idr:bool, startup_skipped:u64,
+    accepted_size:Option<(u32,u32)>,
     queue_recovery:crate::streaming::video::timing::QueueRecovery,
     last_overflow_log:Option<Instant>,overflow_count:u64,
     stream_too_large: bool,
@@ -182,7 +183,7 @@ impl VideoRtp {
             last_frame_timestamp: None,
             source_frame_duration_us: None,
             damage_score: 0,
-            cadence:Default::default(),needs_clean_idr:true,startup_skipped:0,
+            cadence:Default::default(),needs_clean_idr:true,startup_skipped:0,accepted_size:None,
             queue_recovery:Default::default(),last_overflow_log:None,overflow_count:0,
             stream_too_large: false,
             waiting_for_keyframe: false,
@@ -372,8 +373,11 @@ impl VideoRtp {
             self.stream_too_large = false;
         }
         let clean_idr=unit.has_idr&&unit.has_pps&&unit.resolution.is_some_and(|(w,h)|w>0&&h>0&&w<=STREAM_WIDTH&&h<=STREAM_HEIGHT);
+        let changed=unit.resolution.is_some_and(|s|self.accepted_size.is_some_and(|old|old!=s));
+        if changed&&!clean_idr{self.needs_clean_idr=true;}
         if self.needs_clean_idr&&!clean_idr{
             self.startup_skipped=self.startup_skipped.saturating_add(1);
+            stats.dropped=stats.dropped.saturating_add(1);
             *keyframe_requested=true;
             return stats;
         }
@@ -383,7 +387,7 @@ impl VideoRtp {
             return stats;
         }
         let period=self.cadence.period(self.source_frame_duration_us);
-        if !worker.submit_access_unit(data.to_vec(),period,clean_idr,completed.timestamp,unit.nal_mask) {
+        if !worker.submit_access_unit(data.to_vec(),period,clean_idr,completed.timestamp,unit.nal_mask,unit.resolution) {
             // A saturated queue is not an AVCDEC error. Keep accepted AUs in order,
             // wait for IDR after a lost reference, and never increment generation here.
             let first=self.queue_recovery.rejected();
@@ -398,6 +402,7 @@ impl VideoRtp {
             return stats;
         }
         if let Some((w,h))=unit.resolution{
+            if clean_idr{self.accepted_size=Some((w,h));}
             inspect_decoder_sps(&data);
             if unit.has_idr{crate::diagnostics::decoder_negotiated_info(w,h,unit.has_pps);}
         }

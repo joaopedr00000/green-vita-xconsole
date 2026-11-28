@@ -1,6 +1,6 @@
 mod decoder;
 pub(crate) mod timing;
-pub const AVCDEC_NUM_REF_FRAMES:u32=1;
+pub const AVCDEC_NUM_REF_FRAMES:u32=4;
 pub const AU_PTS_STEP:u64=1500;
 mod memory;
 pub(crate) mod metrics;
@@ -10,6 +10,8 @@ pub const STREAM_WIDTH: u32 = 1280;
 pub const STREAM_HEIGHT: u32 = 720;
 pub const HW_OUTPUT_WIDTH: u32 = 960;
 pub const HW_OUTPUT_HEIGHT: u32 = 544;
+pub const REQUEST_WIDTH:u32=HW_OUTPUT_WIDTH;
+pub const REQUEST_HEIGHT:u32=HW_OUTPUT_HEIGHT;
 
 pub use memory::reserve_decoder_cdram;
 pub use metrics::video_performance_summary;

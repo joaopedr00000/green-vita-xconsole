@@ -225,7 +225,7 @@ pub(crate) fn decoder_sps_info(profile:u8,flags:u8,level:u8,refs:u32,restriction
 }
 
 
-pub(crate) fn decoder_config_info(w:u32,h:u32,ow:u32,oh:u32){write_record("decoder_config",&format!("decode={w}x{h} output={ow}x{oh} refs=1 output_slots=1"));}
+pub(crate) fn decoder_config_info(w:u32,h:u32,ow:u32,oh:u32,refs:u32,phy:bool){write_record("decoder_config",&format!("decode={w}x{h} output={ow}x{oh} refs={refs} output_slots=1 phycont={phy}"));}
 pub(crate) fn decoder_negotiated_info(w:u32,h:u32,pps:bool){write_record("decoder_negotiated",&format!("idr={w}x{h} pps={pps}"));}
 pub(crate) fn decoder_startup_info(seq:u64,pending:usize,elapsed_us:u64){write_record("decoder_startup",&format!("first_output_au={seq} pending_pts={pending} elapsed_us={elapsed_us}"));}
 pub(crate) fn decoder_lag_change(before:Option<u64>,after:u64,pending:usize){write_record("decoder_lag",&format!("before={before:?} after={after} pending_pts={pending}"));}
@@ -237,3 +237,7 @@ pub(crate) fn decoder_cadence_input(seq:u64,pts:u64,period:u64,gap:u64,mask:u32,
 pub(crate) fn decoder_cadence_window(period:u64,over:u64,matched:u64,vcl:u64,other:u64){write_record("decoder_cadence_window",&format!("period_us={period} age_over_100ms={over} matched={matched} empty_vcl={vcl} empty_other={other}"));}
 
 pub(crate) fn decoder_queue_recovered(rejected:u64){write_record("decoder_queue_recovered",&format!("rejected={rejected} generation_unchanged=true"));}
+
+pub(crate) fn decoder_allocation_attempt(refs:u32,phy:bool,ok:bool,bytes:u32){write_record("decoder_allocation",&format!("refs={refs} phycont={phy} ok={ok} allocated_bytes={bytes}"));}
+pub(crate) fn decoder_clocks(c:[i32;4]){write_record("decoder_clocks",&format!("arm={} bus={} gpu={} xbar={}",c[0],c[1],c[2],c[3]));}
+pub(crate) fn decoder_calls_by_result(s:&crate::streaming::video::timing::CallStats){let a=&s.picture;let b=&s.empty;write_record("decoder_call_classes",&format!("picture_n={} picture_avg_us={} picture_max_us={} picture_over_16ms={} empty_n={} empty_avg_us={} empty_max_us={} empty_over_16ms={}",a.n,a.avg(),a.max,a.slow,b.n,b.avg(),b.max,b.slow));}
