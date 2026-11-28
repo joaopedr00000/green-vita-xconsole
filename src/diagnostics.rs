@@ -235,3 +235,5 @@ pub(crate) fn cadence_change(old:u8,new:u8){write_record("decoder_cadence",&form
 pub(crate) fn decoder_clean_start(skipped:u64,period:u64){write_record("decoder_clean_start",&format!("skipped_before_idr={skipped} period_us={period}"));}
 pub(crate) fn decoder_cadence_input(seq:u64,pts:u64,period:u64,gap:u64,mask:u32,bytes:usize){write_record("decoder_empty_input",&format!("au={seq} pts90k={pts} period_us={period} submit_gap_us={gap} nal_mask=0x{mask:08x} bytes={bytes}"));}
 pub(crate) fn decoder_cadence_window(period:u64,over:u64,matched:u64,vcl:u64,other:u64){write_record("decoder_cadence_window",&format!("period_us={period} age_over_100ms={over} matched={matched} empty_vcl={vcl} empty_other={other}"));}
+
+pub(crate) fn decoder_queue_recovered(rejected:u64){write_record("decoder_queue_recovered",&format!("rejected={rejected} generation_unchanged=true"));}

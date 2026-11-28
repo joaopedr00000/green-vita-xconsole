@@ -59,10 +59,23 @@ impl Cadence{
     }
     pub fn period(&self,fallback:Option<u64>)->Option<u64>{match self.active{30=>Some(33_333),60=>Some(16_667),_=>fallback}}
 }
-/// Limit compressed input backlog by duration, not a fixed frame count.
-pub(crate) fn queue_limit(period:Option<u64>)->usize{
-    let us=period.filter(|v|(8_000..=100_000).contains(v)).unwrap_or(33_333);
-    (80_000/us).clamp(2,6) as usize
+/// Restore 0.3.4's normal 2–6 AU capacity. A new decoder or recovery
+/// keyframe gets all six slots so startup/IDR bursts can make progress.
+pub(crate) fn queue_limit(period:Option<u64>,primed:bool,clean_idr:bool)->usize{
+    if !primed || clean_idr{return 6;}
+    let fps=period.filter(|v|*v>0).map(|v|1_000_000/v).unwrap_or(30);
+    2+((fps.saturating_sub(30).min(25)*4+12)/25) as usize
+}
+/// Saturation is not a decoder failure. Keep the current generation and
+/// drain its already accepted prefix; do not resume dependent pictures until IDR.
+#[derive(Default)]
+pub(crate) struct QueueRecovery{waiting:bool}
+impl QueueRecovery{
+    pub fn accepts(&self,idr:bool)->bool{!self.waiting||idr}
+    pub fn rejected(&mut self)->bool{let first=!self.waiting;self.waiting=true;first}
+    pub fn accepted(&mut self,idr:bool)->bool{if self.waiting&&idr{self.waiting=false;true}else{false}}
+    pub fn waiting(&self)->bool{self.waiting}
+    pub fn clear(&mut self){self.waiting=false;}
 }
 pub(crate) fn has_vcl(mask:u32)->bool{mask&((0b11111<<1)|(0b111<<19))!=0}
 #[cfg(test)]mod cadence_tests{
@@ -85,8 +98,18 @@ pub(crate) fn has_vcl(mask:u32)->bool{mask&((0b11111<<1)|(0b111<<19))!=0}
         assert_eq!(c.period(None),Some(33_333));
         for _ in 0..7{assert_eq!(c.observe(16_667),None);}
         assert_eq!(c.observe(16_667),Some((30,60)));
-        assert_eq!(queue_limit(Some(33_333)),2);assert_eq!(queue_limit(Some(16_667)),4);
-        assert_eq!(queue_limit(None),2);assert_eq!(queue_limit(Some(0)),2);
+        assert_eq!(queue_limit(Some(33_333),true,false),2);assert_eq!(queue_limit(Some(16_667),true,false),6);
+        assert_eq!(queue_limit(None,true,false),2);assert_eq!(queue_limit(Some(0),true,false),2);
+        assert_eq!(queue_limit(Some(33_333),false,false),6);assert_eq!(queue_limit(Some(33_333),true,true),6);
+    }
+    #[test]fn overflow_waits_for_accepted_idr_without_restart(){
+        let mut r=QueueRecovery::default();
+        assert!(r.accepts(false));assert!(r.rejected());assert!(!r.rejected());
+        assert!(!r.accepts(false));assert!(r.accepts(true));
+        assert!(!r.accepted(false));assert!(r.waiting());
+        assert!(!r.rejected());assert!(r.waiting());
+        assert!(r.accepted(true));assert!(!r.waiting());assert!(r.accepts(false));
+        assert!(r.rejected());r.clear();assert!(r.accepts(false));
     }
     #[test]fn nal_classification(){assert!(!has_vcl((1<<7)|(1<<8)));assert!(has_vcl(1<<5));assert!(has_vcl(1<<1));}
 }

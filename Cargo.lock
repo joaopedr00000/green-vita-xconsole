@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "green-vita"
-version = "0.3.5-beta.1"
+version = "0.3.5-beta.2"
 dependencies = [
  "anyhow",
  "bytes",

@@ -10,7 +10,6 @@ use std::time::Instant;
 
 // Faster streams arrive in larger bursts. Keep the normal 30 fps limit small, but
 // allow enough room for roughly 100 ms of compressed video near the observed 55 fps.
-const MIN_PENDING_ACCESS_UNITS: usize = 2;
 const MAX_PENDING_ACCESS_UNITS: usize = 6;
 
 struct QueuedAccessUnit {
@@ -33,6 +32,7 @@ pub struct VideoDecodeWorker {
     access_units: Sender<QueuedAccessUnit>,
     commands: Sender<DecoderCommand>,
     generation: Arc<AtomicU64>,
+    primed_generation:Arc<AtomicU64>,
     pub(crate) latest_result: Arc<Mutex<Option<DecodeResult>>>,
     pub(crate) result_ready: Arc<tokio::sync::Notify>,
 }
@@ -47,6 +47,8 @@ impl VideoDecodeWorker {
         let (commands, worker_commands) = unbounded();
         let generation = Arc::new(AtomicU64::new(0));
         let worker_generation = Arc::clone(&generation);
+        let primed_generation=Arc::new(AtomicU64::new(u64::MAX));
+        let worker_primed=Arc::clone(&primed_generation);
         let latest_result = Arc::new(Mutex::new(None));
         let worker_latest_result = Arc::clone(&latest_result);
         let result_ready = Arc::new(tokio::sync::Notify::new());
@@ -62,6 +64,7 @@ impl VideoDecodeWorker {
                     worker_access_units,
                     worker_commands,
                     worker_generation,
+                    worker_primed,
                     worker_latest_result,
                     worker_result_ready,
                     decoder,
@@ -75,13 +78,16 @@ impl VideoDecodeWorker {
             access_units,
             commands,
             generation,
+            primed_generation,
             latest_result,
             result_ready,
         })
     }
 
     pub fn submit_access_unit(&self, data: Vec<u8>, source_frame_duration_us: Option<u64>,clean_idr:bool,rtp_timestamp:u32,nal_mask:u32) -> bool {
-        let pending_limit=super::timing::queue_limit(source_frame_duration_us);
+        let generation=self.generation.load(Ordering::Acquire);
+        let primed=self.primed_generation.load(Ordering::Acquire)==generation;
+        let pending_limit=super::timing::queue_limit(source_frame_duration_us,primed,clean_idr);
         if self.access_units.len() >= pending_limit {
             metrics::METRICS.queue_full.fetch_add(1, Ordering::Relaxed);
             return false;
@@ -92,7 +98,7 @@ impl VideoDecodeWorker {
             queued_at: Instant::now(),
             source_duration_us:source_frame_duration_us,
             clean_idr,rtp_timestamp,nal_mask,
-            generation: self.generation.load(Ordering::Acquire),
+            generation,
         };
         match self.access_units.try_send(access_unit) {
             Ok(()) => true,
@@ -147,6 +153,7 @@ fn run_decode_loop(
     access_units: Receiver<QueuedAccessUnit>,
     commands: Receiver<DecoderCommand>,
     generation: Arc<AtomicU64>,
+    primed_generation:Arc<AtomicU64>,
     latest_result: Arc<Mutex<Option<DecodeResult>>>,
     result_ready: Arc<tokio::sync::Notify>,
     initial_decoder: HwVideoDecoder,
@@ -171,6 +178,7 @@ fn run_decode_loop(
                     &mut decoder,
                     config,
                     &generation,
+                    &primed_generation,
                     &latest_result,
                     &result_ready,
                     access_unit,
@@ -186,6 +194,7 @@ fn decode_queued_access_unit(
     decoder: &mut Option<HwVideoDecoder>,
     config: DecoderConfig,
     generation: &AtomicU64,
+    primed_generation:&AtomicU64,
     latest_result: &Mutex<Option<DecodeResult>>,
     result_ready: &tokio::sync::Notify,
     mut access_unit: QueuedAccessUnit,
@@ -228,7 +237,6 @@ fn decode_queued_access_unit(
     }
 
     // Measure the hardware call and contain an unexpected decoder panic inside its worker.
-    let decode_started_at = Instant::now();
     let stages=crate::streaming::hud::DecodeStages {queue_us:dequeued_at.saturating_duration_since(access_unit.queued_at).as_micros() as u64,texture_us:texture_acquired_at.saturating_duration_since(texture_started_at).as_micros() as u64,decode_us:0,..Default::default()};
     let timing=FrameTiming{enqueued:access_unit.queued_at,stages,generation:access_unit.generation};
     let decode_result=catch_unwind(AssertUnwindSafe(||decoder.as_mut().expect("decoder recreated above").decode(&mut access_unit.data,direct_target.target(),timing,access_unit.rtp_timestamp,access_unit.source_duration_us,access_unit.nal_mask)));
@@ -239,6 +247,7 @@ fn decode_queued_access_unit(
 
     match decode_result {
         Ok(Ok(Some(timing))) if timing.generation==generation.load(Ordering::Acquire) => {
+            primed_generation.store(timing.generation,Ordering::Release);
             metrics::METRICS.decode_us.store(timing.stages.decode_us,Ordering::Relaxed);
             metrics::METRICS.decoded.fetch_add(1, Ordering::Relaxed);
             let frame = direct_target.publish(decode_finished_at,timing.enqueued,timing.stages);

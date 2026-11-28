@@ -80,6 +80,8 @@ pub(super) struct VideoRtp {
     damage_score: u8,
     cadence:crate::streaming::video::timing::Cadence,
     needs_clean_idr:bool, startup_skipped:u64,
+    queue_recovery:crate::streaming::video::timing::QueueRecovery,
+    last_overflow_log:Option<Instant>,overflow_count:u64,
     stream_too_large: bool,
     waiting_for_keyframe: bool,
     held_future: Vec<Packet>,
@@ -181,6 +183,7 @@ impl VideoRtp {
             source_frame_duration_us: None,
             damage_score: 0,
             cadence:Default::default(),needs_clean_idr:true,startup_skipped:0,
+            queue_recovery:Default::default(),last_overflow_log:None,overflow_count:0,
             stream_too_large: false,
             waiting_for_keyframe: false,
             held_future: Vec::new(),
@@ -194,11 +197,12 @@ impl VideoRtp {
     }
 
     pub(super) fn waiting_for_keyframe(&self) -> bool {
-        self.waiting_for_keyframe
+        self.waiting_for_keyframe||self.queue_recovery.waiting()||self.needs_clean_idr
     }
 
     pub(super) fn wait_for_keyframe(&mut self) {
         self.needs_clean_idr=true;
+        self.queue_recovery.clear();
         self.waiting_for_keyframe = true;
     }
 
@@ -373,32 +377,41 @@ impl VideoRtp {
             *keyframe_requested=true;
             return stats;
         }
-        if self.waiting_for_keyframe {
-            // Later keyframes may contain only IDR; AVCDEC retains SPS/PPS across resyncs.
-            if !unit.has_idr {
-                *keyframe_requested = true;
-                stats.dropped = stats.dropped.saturating_add(1);
-                return stats;
-            }
-            self.waiting_for_keyframe = false;
-            self.damage_score = 0;
-        } else if !frame_was_damaged {
-            self.damage_score = self.damage_score.saturating_sub(1);
-        }
-
-        if let Some((w,h))=unit.resolution {
-            inspect_decoder_sps(&data);
-            if unit.has_idr {crate::diagnostics::decoder_negotiated_info(w,h,unit.has_pps);}
+        if (self.waiting_for_keyframe&&!unit.has_idr)||!self.queue_recovery.accepts(unit.has_idr){
+            *keyframe_requested=true;
+            stats.dropped=stats.dropped.saturating_add(1);
+            return stats;
         }
         let period=self.cadence.period(self.source_frame_duration_us);
         if !worker.submit_access_unit(data.to_vec(),period,clean_idr,completed.timestamp,unit.nal_mask) {
-            // A lost compressed reference cannot safely be followed by more P frames.
-            // Invalidate queued generation and request a self-contained IDR.
-            worker.begin_resync();self.waiting_for_keyframe=true;self.needs_clean_idr=true;
-            crate::diagnostics::step("decoder_queue","BUDGET_FULL_RESYNC");
-            *keyframe_requested = true;
-            stats.dropped = stats.dropped.saturating_add(1);
-        }else if self.needs_clean_idr{
+            // A saturated queue is not an AVCDEC error. Keep accepted AUs in order,
+            // wait for IDR after a lost reference, and never increment generation here.
+            let first=self.queue_recovery.rejected();
+            self.overflow_count=self.overflow_count.saturating_add(1);
+            let now=Instant::now();
+            if self.last_overflow_log.is_none_or(|last|now.saturating_duration_since(last)>=std::time::Duration::from_secs(1)){
+                crate::diagnostics::step("decoder_queue","FULL_WAIT_IDR_NO_RESET");
+                self.last_overflow_log=Some(now);
+            }
+            if first||unit.has_idr{*keyframe_requested=true;}
+            stats.dropped=stats.dropped.saturating_add(1);
+            return stats;
+        }
+        if let Some((w,h))=unit.resolution{
+            inspect_decoder_sps(&data);
+            if unit.has_idr{crate::diagnostics::decoder_negotiated_info(w,h,unit.has_pps);}
+        }
+        if self.queue_recovery.accepted(unit.has_idr){
+            crate::diagnostics::decoder_queue_recovered(self.overflow_count);
+            self.overflow_count=0;
+        }
+        if self.waiting_for_keyframe{
+            self.waiting_for_keyframe=false;
+            self.damage_score=0;
+        }else if !frame_was_damaged{
+            self.damage_score=self.damage_score.saturating_sub(1);
+        }
+        if self.needs_clean_idr{
             self.needs_clean_idr=false;
             crate::diagnostics::decoder_clean_start(self.startup_skipped,period.unwrap_or(0));
             self.startup_skipped=0;
@@ -407,7 +420,7 @@ impl VideoRtp {
     }
 
     fn record_damage(&mut self, worker: &VideoDecodeWorker) {
-        if self.waiting_for_keyframe {
+        if self.waiting_for_keyframe() {
             return;
         }
 

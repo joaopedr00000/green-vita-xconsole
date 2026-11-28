@@ -14,7 +14,7 @@ use rtc::sansio::Protocol;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const KEYFRAME_REQUEST_COOLDOWN: Duration = Duration::from_millis(300);
+const KEYFRAME_REQUEST_COOLDOWN: Duration = Duration::from_millis(500);
 const INITIAL_VIDEO_GRACE: Duration = Duration::from_millis(500);
 const INITIAL_VIDEO_KEYFRAME_INTERVAL: Duration = Duration::from_millis(500);
 
