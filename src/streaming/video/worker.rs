@@ -209,6 +209,16 @@ fn decode_queued_access_unit(
     }
 
     let dequeued_at=Instant::now();
+    let texture_started_at=Instant::now();
+    let wait_ms=crate::streaming::policy::experimental_texture_wait_ms(crate::settings::latency_mode(),dequeued_at.saturating_duration_since(access_unit.queued_at).as_micros() as u64,remaining,access_unit.source_duration_us);
+    let Some(direct_target) = direct_output.lock_decode_target(wait_ms) else {
+        // Do not decode until the renderer has registered its three GXM textures. There is no
+        // legacy output buffer to copy from anymore.
+        metrics::METRICS.skipped.fetch_add(1, Ordering::Relaxed);
+        return;
+    };
+    let texture_acquired_at=Instant::now();
+    if access_unit.generation != generation.load(Ordering::Acquire) {return;}
     // A single controlled restart at a naturally arriving self-contained IDR.
     // Never drain reference pictures or discard arbitrary compressed P frames.
     let trial=access_unit.clean_idr && !*restart_trial_used &&
@@ -237,17 +247,9 @@ fn decode_queued_access_unit(
         }
     }
 
-    let texture_started_at=Instant::now();
-    let wait_ms=crate::streaming::policy::experimental_texture_wait_ms(crate::settings::latency_mode(),dequeued_at.saturating_duration_since(access_unit.queued_at).as_micros() as u64,remaining,access_unit.source_duration_us);
-    let Some(direct_target) = direct_output.lock_decode_target(wait_ms) else {
-        // Do not decode until the renderer has registered its three GXM textures. There is no
-        // legacy output buffer to copy from anymore.
-        metrics::METRICS.skipped.fetch_add(1, Ordering::Relaxed);
-        return;
-    };
     // Measure the hardware call and contain an unexpected decoder panic inside its worker.
     let decode_started_at = Instant::now();
-    let stages=crate::streaming::hud::DecodeStages {queue_us:dequeued_at.saturating_duration_since(access_unit.queued_at).as_micros() as u64,texture_us:decode_started_at.saturating_duration_since(texture_started_at).as_micros() as u64,decode_us:0,..Default::default()};
+    let stages=crate::streaming::hud::DecodeStages {queue_us:dequeued_at.saturating_duration_since(access_unit.queued_at).as_micros() as u64,texture_us:texture_acquired_at.saturating_duration_since(texture_started_at).as_micros() as u64,decode_us:0,..Default::default()};
     let timing=FrameTiming{enqueued:access_unit.queued_at,stages,generation:access_unit.generation};
     let decode_result=catch_unwind(AssertUnwindSafe(||decoder.as_mut().expect("decoder recreated above").decode(&access_unit.data,direct_target.target(),timing)));
     let decode_finished_at=Instant::now();
