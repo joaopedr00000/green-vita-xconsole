@@ -11,3 +11,25 @@ impl<T> Pending<T>{
 #[cfg(test)] mod tests{use super::*;
 #[test]fn reordered(){let mut p=Pending::new();p.push(1500,10);p.push(3000,20);p.push(4500,30);assert_eq!(p.take(1500),Some(10));assert_eq!(p.take(4500),Some(30));assert_eq!(p.take(3000),Some(20));assert_eq!(p.take(1500),None);}
 #[test]fn bounded(){let mut p=Pending::new();for i in 0..40{p.push(i,i);}assert_eq!(p.len(),CAP);assert_eq!(p.take(0),None);assert_eq!(p.take(u64::MAX),None);assert_eq!(p.take(39),Some(39));}}
+
+/// Keep decoder input backed by an initialized 64-byte tail, while passing only
+/// the original compressed byte count to the API. The owned AU is consumed once.
+pub(crate) fn pad_access_unit(data:&mut Vec<u8>)->Result<u32,&'static str>{
+    let size=data.len();
+    if size==0 || size>u32::MAX as usize-64 {return Err("invalid AVC input size");}
+    data.try_reserve(64).map_err(|_|"AVC input padding allocation failed")?;
+    data.resize(size+64,0);
+    Ok(size as u32)
+}
+#[cfg(test)]mod padding_tests{
+    use super::*;
+    #[test]fn length_excludes_initialized_tail(){
+        let mut au=vec![0,0,0,1,0x65,0xff];
+        let original=au.clone();
+        assert_eq!(pad_access_unit(&mut au),Ok(6));
+        assert_eq!(&au[..6],&original[..]);
+        assert_eq!(au.len(),70);
+        assert!(au[6..].iter().all(|&b|b==0));
+    }
+    #[test]fn empty_is_rejected(){assert!(pad_access_unit(&mut vec![]).is_err());}
+}

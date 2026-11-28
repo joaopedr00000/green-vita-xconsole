@@ -137,10 +137,11 @@ impl PublicDecoder {
     /// Decodes one Access Unit. Returns None when the hardware produces no picture yet.
     pub fn decode(
         &mut self,
-        access_unit: &[u8],
+        access_unit: &mut Vec<u8>,
         direct_target: VideoTextureTarget,
         input_pts:u64,
     ) -> Result<Option<u64>> {
+        let input_size=super::timing::pad_access_unit(access_unit).map_err(anyhow::Error::msg)?;
         unsafe {
             let au = SceAvcdecAu {
                 pts: SceVideodecTimeStamp {
@@ -152,8 +153,8 @@ impl PublicDecoder {
                     lower: input_pts as u32,
                 },
                 es: SceAvcdecBuf {
-                    pBuf: access_unit.as_ptr() as *mut c_void,
-                    size: access_unit.len() as u32,
+                    pBuf: access_unit.as_mut_ptr() as *mut c_void,
+                    size: input_size,
                 },
             };
 
@@ -273,7 +274,7 @@ impl HwVideoDecoder {
         crate::streaming::policy::decoder_restart_probe(false,true,self.last_lag.unwrap_or(0),self.total_matched,self.started.elapsed().as_secs())
     }
     pub(super) fn mark_trial(&mut self,baseline:u64){self.recovery_baseline=Some(baseline);}
-    pub fn decode(&mut self,data:&[u8],target:VideoTextureTarget,mut timing:FrameTiming)->Result<Option<FrameTiming>>{
+    pub fn decode(&mut self,data:&mut Vec<u8>,target:VideoTextureTarget,mut timing:FrameTiming)->Result<Option<FrameTiming>>{
         self.last_generation=Some(timing.generation);
         self.seq=self.seq.saturating_add(1);
         let pts=self.seq.saturating_mul(super::AU_PTS_STEP);
