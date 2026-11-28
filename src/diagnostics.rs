@@ -198,3 +198,7 @@ pub(crate) fn decoder_buffer_info(outputs:u64,empty:u64,peak_empty:u32,pending:u
 pub(crate) fn decoder_sps_info(profile:u8,flags:u8,level:u8,refs:u32,restriction:Option<(u32,u32)>,poc2:bool,applied:bool){
     write_record("decoder_sps",&format!("profile={profile} flags={flags:02x} level={level} refs={refs} restriction={restriction:?} poc2={poc2} tightened={applied}"));
 }
+
+pub(crate) fn decoder_dual_info(calls:u64,dual_calls:u64,dual_outputs:u64){
+    write_record("decoder_dual",&format!("calls={calls} two_targets={dual_calls} two_outputs={dual_outputs}"));
+}

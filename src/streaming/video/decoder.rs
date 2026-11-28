@@ -3,6 +3,9 @@ use super::memory::{CdramBlock, release_reserved_decoder_cdram};
 use super::{DecoderConfig, VideoTextureTarget};
 use anyhow::{Result, bail};
 use std::os::raw::c_void;
+use std::sync::atomic::{AtomicBool,Ordering};
+// A failed two-output call disables the experiment until the app restarts.
+static DUAL_DISABLED:AtomicBool=AtomicBool::new(false);
 use vitasdk_sys::*;
 
 // The idea of reducing the reference frames came from MattKC on his Vanilla project
@@ -138,9 +141,9 @@ impl PublicDecoder {
     pub fn decode(
         &mut self,
         access_unit: &[u8],
-        direct_target: VideoTextureTarget,
+        targets: [Option<VideoTextureTarget>;2],
         input_pts:u64,
-    ) -> Result<Option<u64>> {
+    ) -> Result<[Option<u64>;2]> {
         unsafe {
             let au = SceAvcdecAu {
                 pts: SceVideodecTimeStamp {
@@ -157,6 +160,7 @@ impl PublicDecoder {
                 },
             };
 
+            let make_picture=|direct_target:VideoTextureTarget|->Result<SceAvcdecPicture>{
             let output_ptr = direct_target.ptr as *mut u8;
             let output_pitch = direct_target.pitch / OUTPUT_BYTES_PER_PIXEL;
             let output_capacity = direct_target.capacity;
@@ -170,7 +174,7 @@ impl PublicDecoder {
                 );
             }
 
-            let mut picture = SceAvcdecPicture {
+            Ok(SceAvcdecPicture {
                 size: size_of::<SceAvcdecPicture>() as u32,
                 frame: SceAvcdecFrame {
                     pixelType: OUTPUT_PIXEL_FORMAT,
@@ -193,22 +197,27 @@ impl PublicDecoder {
                     pPicture: [output_ptr.cast(), std::ptr::null_mut()],
                 },
                 info: std::mem::zeroed(),
+            })
             };
-            let mut picture_ptr: *mut SceAvcdecPicture = &mut picture;
-            let mut array_picture = SceAvcdecArrayPicture {
-                numOfOutput: 0,
-                numOfElm: 1,
-                pPicture: &mut picture_ptr,
-            };
-
-            let ret = sceAvcdecDecode(&self.decoder.0, &au, &mut array_picture);
-            if ret < 0 {
-                bail!("sceAvcdecDecode failed: {ret:#x}");
+            let first=targets[0].ok_or_else(||anyhow::anyhow!("missing first decoder target"))?;
+            let mut picture=make_picture(first)?;
+            let mut second=match targets[1]{Some(t)=>Some(make_picture(t)?),None=>None};
+            let mut pointers:[*mut SceAvcdecPicture;2]=[&mut picture,std::ptr::null_mut()];
+            if let Some(p)=second.as_mut(){pointers[1]=p;}
+            let count=if second.is_some(){2}else{1};
+            let mut array_picture=SceAvcdecArrayPicture{numOfOutput:0,numOfElm:count,pPicture:pointers.as_mut_ptr()};
+            let ret=sceAvcdecDecode(&self.decoder.0,&au,&mut array_picture);
+            if ret<0 || array_picture.numOfOutput>count {
+                if count==2 {
+                    DUAL_DISABLED.store(true,Ordering::Relaxed);
+                    crate::diagnostics::step("decoder_dual","REJECTED_SINGLE_ON_RECOVERY");
+                }
+                bail!("sceAvcdecDecode failed or returned invalid output count: {ret:#x}, {}",array_picture.numOfOutput);
             }
-            if array_picture.numOfOutput == 0 {
-                return Ok(None);
-            }
-
+            let mut result=[None,None];
+            for i in 0..array_picture.numOfOutput as usize{
+                let picture=if i==0{&picture}else{second.as_ref().expect("bounded output count")};
+                let output_capacity=targets[i].expect("bounded output count").capacity;
             // `framePitch` is in pixels. Validate the complete byte size before trusting the
             // decoder-provided pitch to write into the SDL texture.
             let row_bytes = picture
@@ -233,7 +242,10 @@ impl PublicDecoder {
                 crate::diagnostics::decoder_color_info(color, 0);
                 self.last_color_info = Some(color);
             }
-            Ok(Some(((picture.info.pts.upper as u64)<<32)|picture.info.pts.lower as u64))
+
+                result[i]=Some(((picture.info.pts.upper as u64)<<32)|picture.info.pts.lower as u64);
+            }
+            Ok(result)
         }
     }
 }
@@ -256,6 +268,9 @@ pub struct HwVideoDecoder {
     peak_no_output: u32,
     peak_pending: usize,
     outputs: u64,
+    calls: u64,
+    dual_calls:u64,
+    dual_outputs:u64,
     empty: u64,
     call_total_us: u64,
     call_max_us: u64,
@@ -270,48 +285,63 @@ impl HwVideoDecoder {
         let backend=PublicDecoder::new(config)?;
         crate::diagnostics::step("lab_decoder","PUBLIC");
         Ok(Self{backend,pending:Pending::new(),seq:0,no_output:0,peak_no_output:0,
-            peak_pending:0,outputs:0,empty:0,call_total_us:0,call_max_us:0,frame_lag_sum:0,frame_lag_max:0,matched:0,last_report:Instant::now()})
+            peak_pending:0,outputs:0,calls:0,dual_calls:0,dual_outputs:0,empty:0,call_total_us:0,call_max_us:0,frame_lag_sum:0,frame_lag_max:0,matched:0,last_report:Instant::now()})
     }
-    pub fn decode(&mut self,data:&[u8],target:VideoTextureTarget,mut timing:FrameTiming)->Result<Option<FrameTiming>>{
+    pub(super) fn allow_two(&self)->bool{!DUAL_DISABLED.load(Ordering::Relaxed)}
+    pub fn decode(&mut self,data:&[u8],targets:[Option<VideoTextureTarget>;2],mut timing:FrameTiming)->Result<Option<(usize,FrameTiming)>>{
         self.seq=self.seq.saturating_add(1);
         let pts=self.seq.saturating_mul(super::AU_PTS_STEP);
         let started=Instant::now();
-        let returned=self.backend.decode(data,target,pts)?;
+        let returned=self.backend.decode(data,targets,pts)?;
+        self.calls+=1;
+        if targets[1].is_some(){self.dual_calls+=1;}
+        if returned[1].is_some(){self.dual_outputs+=1;}
         let call_us=started.elapsed().as_micros() as u64;
         timing.stages.decode_us=call_us;
         self.pending.push(pts,(timing,started));
         self.call_total_us=self.call_total_us.saturating_add(call_us);
         self.call_max_us=self.call_max_us.max(call_us);
-        let result=if let Some(id)=returned {
-            self.outputs+=1;
-            self.no_output=0;
-            if let Some((mut original,submitted))=self.pending.take(id){
-                let lag=pts.saturating_sub(id)/super::AU_PTS_STEP;
-                self.frame_lag_sum=self.frame_lag_sum.saturating_add(lag);
-                self.frame_lag_max=self.frame_lag_max.max(lag);self.matched+=1;
-                original.stages.verified=true;
-                original.stages.decoder_age_us=submitted.elapsed().as_micros() as u64;
-                original.stages.decoder_pending=self.pending.len() as u32;
-                Some(original)
-            }else{
-                timing.stages.verified=false;
-                timing.stages.decoder_pending=self.pending.len() as u32;
-                Some(timing)
-            }
-        }else{
-            self.empty+=1;
-            self.no_output=self.no_output.saturating_add(1);
+        let mut latest:Option<(usize,u64,FrameTiming)>=None;
+        if returned[0].is_none() && returned[1].is_none(){
+            self.empty+=1;self.no_output=self.no_output.saturating_add(1);
             self.peak_no_output=self.peak_no_output.max(self.no_output);
-            None
-        };
+        }else{
+            self.no_output=0;
+            for (slot,id) in returned.into_iter().enumerate(){
+                let Some(id)=id else{continue;};
+                self.outputs+=1;
+                let original=if let Some((mut original,submitted))=self.pending.take(id){
+                    let lag=pts.saturating_sub(id)/super::AU_PTS_STEP;
+                    self.frame_lag_sum=self.frame_lag_sum.saturating_add(lag);
+                    self.frame_lag_max=self.frame_lag_max.max(lag);self.matched+=1;
+                    original.stages.verified=true;
+                    original.stages.decoder_age_us=submitted.elapsed().as_micros() as u64;
+                    original
+                }else{
+                    let mut unknown=timing;unknown.stages.verified=false;unknown
+                };
+                // Never prefer unmatched or pre-resync pictures over confirmed ones.
+                if original.generation!=timing.generation {continue;}
+                if latest.as_ref().is_none_or(|(_,old_id,old)|
+                    (original.stages.verified && !old.stages.verified) ||
+                    (original.stages.verified==old.stages.verified && id>*old_id)){
+                    latest=Some((slot,id,original));
+                }
+            }
+        }
+        let result=latest.map(|(slot,_,mut timing)|{
+            timing.stages.decoder_pending=self.pending.len() as u32;
+            (slot,timing)
+        });
         self.peak_pending=self.peak_pending.max(self.pending.len());
         if self.last_report.elapsed().as_secs()>=5 {
-            let calls=self.outputs+self.empty;
+            let calls=self.calls;
+            crate::diagnostics::decoder_dual_info(calls,self.dual_calls,self.dual_outputs);
             crate::diagnostics::decoder_buffer_info(self.outputs,self.empty,self.peak_no_output,
                 self.pending.len(),self.peak_pending,self.call_total_us/calls.max(1),self.call_max_us,
                 self.frame_lag_sum.saturating_mul(100)/self.matched.max(1),self.frame_lag_max);
             self.last_report=Instant::now();
-            self.outputs=0;self.empty=0;self.peak_no_output=self.no_output;
+            self.outputs=0;self.calls=0;self.dual_calls=0;self.dual_outputs=0;self.empty=0;self.peak_no_output=self.no_output;
             self.peak_pending=self.pending.len();self.call_total_us=0;self.call_max_us=0;
             self.frame_lag_sum=0;self.frame_lag_max=0;self.matched=0;
         }

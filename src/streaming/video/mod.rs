@@ -138,7 +138,7 @@ impl DirectVideoOutput {
         Some(frame)
     }
 
-    pub(super) fn lock_decode_target(&self,wait_ms:u64) -> Option<DirectVideoTargetGuard<'_>> {
+    pub(super) fn lock_decode_target(&self,wait_ms:u64,allow_two:bool) -> Option<DirectVideoTargetGuard<'_>> {
         let mut state = self.state.lock().ok()?;
         if state.retiring||state.in_flight.is_some(){return None;}
         if state.pending.is_some() && state.targets.as_ref().is_some_and(|t|t.len()==2) {
@@ -167,9 +167,12 @@ impl DirectVideoOutput {
         }
         // Reserve the slot, then release the mutex during hardware decoding.
         // The renderer can claim a different completed texture in parallel.
+        let secondary=if allow_two {crate::streaming::policy::second_decode_texture(count,state.displayed,state.pending.map(|f|f.texture_index),index).and_then(|i|state.targets.as_ref()?.get(i).copied().map(|t|(i,t)))} else {None};
+        // No pending image exists when two targets are reserved. A renderer
+        // cannot claim either until publish; clear_targets waits for this guard.
         state.in_flight=Some(index);
         drop(state);
-        Some(DirectVideoTargetGuard {output:self,target,index,active:true})
+        Some(DirectVideoTargetGuard {output:self,target,index,secondary,active:true})
     }
 }
 
@@ -177,15 +180,18 @@ pub(super) struct DirectVideoTargetGuard<'a> {
     output: &'a DirectVideoOutput,
     target: VideoTextureTarget,
     index: usize,
+    secondary: Option<(usize,VideoTextureTarget)>,
     active: bool,
 }
 
 impl DirectVideoTargetGuard<'_> {
-    pub(super) fn publish(mut self,decoded_at:Instant,enqueued_at:Instant,stages:crate::streaming::hud::DecodeStages) -> DecodedFrame {
+    pub(super) fn targets(&self)->[Option<VideoTextureTarget>;2]{[Some(self.target),self.secondary.map(|(_,t)|t)]}
+    pub(super) fn publish(mut self,slot:usize,decoded_at:Instant,enqueued_at:Instant,stages:crate::streaming::hud::DecodeStages) -> DecodedFrame {
+        let texture_index=if slot==0{self.index}else{self.secondary.expect("validated second output").0};
         let mut state=self.output.state.lock().unwrap_or_else(|e|e.into_inner());
         debug_assert_eq!(state.in_flight,Some(self.index));
         state.next_generation=state.next_generation.wrapping_add(1);
-        let frame=DecodedFrame{texture_index:self.index,generation:state.next_generation,decoded_at,enqueued_at,stages};
+        let frame=DecodedFrame{texture_index,generation:state.next_generation,decoded_at,enqueued_at,stages};
         if !state.retiring && state.pending.replace(frame).is_some(){metrics::OUTPUT_REPLACEMENTS.fetch_add(1,std::sync::atomic::Ordering::Relaxed);}
         state.in_flight=None;
         self.active=false;

@@ -211,3 +211,23 @@ pub fn adaptive_reorder_grace_ms(base:u64,mode:u8,low_latency:bool,jitter_us:u64
     if mode>=2 && low_latency && !recovering && jitter_us<=4_000 { (8+jitter_us/500).clamp(8,16).min(base) } else {base}
 }
 #[cfg(test)] mod adaptive_reorder_tests{use super::*;#[test]fn safe_bounds(){assert_eq!(adaptive_reorder_grace_ms(16,2,true,0,false),8);assert_eq!(adaptive_reorder_grace_ms(18,2,true,4000,false),16);assert_eq!(adaptive_reorder_grace_ms(24,2,true,5000,false),24);assert_eq!(adaptive_reorder_grace_ms(16,2,true,0,true),16);assert_eq!(adaptive_reorder_grace_ms(32,2,false,0,false),32);}}
+
+/// Reserve a second decoder destination only if it cannot conflict with a
+/// displayed or pending texture. Never evict a pending image speculatively.
+pub fn second_decode_texture(count:usize,displayed:Option<usize>,pending:Option<usize>,first:usize)->Option<usize>{
+    if count!=3 || pending.is_some() {return None;}
+    (0..count).find(|i|*i!=first && Some(*i)!=displayed)
+}
+#[cfg(test)] mod dual_output_tests {
+    use super::*;
+    #[test] fn dual_only_with_two_free_targets(){
+        for displayed in 0..3 {
+            let first=free_texture(3,Some(displayed),None).unwrap();
+            let second=second_decode_texture(3,Some(displayed),None,first).unwrap();
+            assert_ne!(first,second);assert_ne!(displayed,second);
+            assert_eq!(second_decode_texture(3,Some(displayed),Some(second),first),None);
+        }
+        assert_eq!(second_decode_texture(2,Some(0),None,1),None);
+    }
+    #[test] fn startup_can_reserve_two(){assert_eq!(second_decode_texture(3,None,None,0),Some(1));}
+}
