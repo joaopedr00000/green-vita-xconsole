@@ -17,6 +17,7 @@ jobs:
       - run: rustc --edition=2024 --test src/streaming/input.rs -o /tmp/green-vita-input-tests && /tmp/green-vita-input-tests
       - run: rustc --edition=2024 --test src/streaming/policy.rs -o /tmp/green-vita-policy-tests && /tmp/green-vita-policy-tests
       - run: rustc --edition=2024 --test src/streaming/hud.rs -o /tmp/green-vita-hud-tests && /tmp/green-vita-hud-tests
+      - run: rustc --edition=2024 --test src/diagnostics/retention.rs -o /tmp/green-vita-retention-tests && /tmp/green-vita-retention-tests
       - run: rustc --edition=2024 --test src/streaming/video/timing.rs -o /tmp/green-vita-timing-tests && /tmp/green-vita-timing-tests
       - run: rustc --edition=2024 --test src/streaming/benchmark.rs -o /tmp/green-vita-benchmark-tests && /tmp/green-vita-benchmark-tests
   build:

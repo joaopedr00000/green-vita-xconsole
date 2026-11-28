@@ -1,6 +1,7 @@
 //! Privacy-conscious diagnostics for experimental xgpuconsole and 720p playback.
 //! Logs only fixed stage names and allowlisted server error codes. Never log tokens,
 //! session IDs, authorization headers, user names, raw server bodies, or identifiers.
+mod retention;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, sync_channel};
@@ -113,6 +114,7 @@ pub(crate) fn initialize() {
             let mut sequence = 0u64;
             let mut segment_count = 0usize;
             let mut initialized=false;
+            let mut cleanup_done=false;
             let mut file: Option<std::fs::File> = None;
             while let Ok(first) = rx.recv() {
                 for record in std::iter::once(first).chain(rx.try_iter().take(QUEUE_CAPACITY)) {
@@ -145,7 +147,18 @@ pub(crate) fn initialize() {
                     }else{LOG_STATUS.store(2,Ordering::Relaxed);DROPPED.fetch_add(1,Ordering::Relaxed);}
                 }
                 if let Some(out)=file.as_mut(){
-                    if out.flush().is_ok(){LOG_STATUS.store(1,Ordering::Relaxed);}
+                    if out.flush().is_ok(){
+                        LOG_STATUS.store(1,Ordering::Relaxed);
+                        if !cleanup_done{
+                            cleanup_done=true;
+                            let (removed,failed)=retention::prune(std::path::Path::new(DIR),crate::experimental::build_id());
+                            sequence=sequence.saturating_add(1);
+                            if writeln!(out,"  {} +{}ms dropped={} log_cleanup: removed={} failed={}",sequence,started.elapsed().as_millis(),DROPPED.load(Ordering::Relaxed),removed,failed).is_ok(){
+                                segment_count+=1;
+                                if out.flush().is_err(){file=None;LOG_STATUS.store(2,Ordering::Relaxed);}
+                            }else{file=None;LOG_STATUS.store(2,Ordering::Relaxed);}
+                        }
+                    }
                     else{file=None;LOG_STATUS.store(2,Ordering::Relaxed);}
                 }
                 if file.is_none(){std::thread::sleep(Duration::from_secs(2));}
