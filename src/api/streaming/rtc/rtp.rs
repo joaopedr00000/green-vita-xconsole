@@ -380,7 +380,7 @@ impl VideoRtp {
             if unit.has_idr {crate::diagnostics::decoder_negotiated_info(w,h,unit.has_pps);}
         }
         let clean_idr=unit.has_idr&&unit.has_pps&&unit.resolution.is_some_and(|(w,h)|w>0&&h>0&&w<=STREAM_WIDTH&&h<=STREAM_HEIGHT);
-        if !worker.submit_access_unit(data.to_vec(), self.source_frame_duration_us,clean_idr) {
+        if !worker.submit_access_unit(data.to_vec(), self.source_frame_duration_us,clean_idr,unit.nal_mask,completed.packets.len()) {
             eprintln!("Video decoder queue is full; continuing while requesting a keyframe");
             *keyframe_requested = true;
             stats.dropped = stats.dropped.saturating_add(1);
@@ -427,6 +427,7 @@ fn timestamp_is_newer(candidate: u32, reference: u32) -> bool {
 struct AccessUnitInfo {
     has_idr: bool,
     has_pps:bool,
+    nal_mask:u32,
     resolution: Option<(u32, u32)>,
 }
 
@@ -434,13 +435,16 @@ fn inspect_h264_access_unit(data: &[u8]) -> AccessUnitInfo {
     let mut info = AccessUnitInfo {
         has_idr: false,
         has_pps:false,
+        nal_mask:0,
         resolution: None,
     };
     let mut reader = AnnexBReader::accumulate(|nal: RefNal<'_>| {
         let Ok(header) = nal.header() else {
             return NalInterest::Ignore;
         };
-        match header.nal_unit_type() {
+        let kind=header.nal_unit_type();
+        info.nal_mask|=1u32<<kind.id();
+        match kind {
             UnitType::SliceLayerWithoutPartitioningIdr => {
                 info.has_idr = true;
                 NalInterest::Ignore

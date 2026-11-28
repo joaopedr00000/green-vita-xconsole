@@ -230,7 +230,6 @@ pub(crate) fn decoder_negotiated_info(w:u32,h:u32,pps:bool){write_record("decode
 pub(crate) fn decoder_startup_info(seq:u64,pending:usize,elapsed_us:u64){write_record("decoder_startup",&format!("first_output_au={seq} pending_pts={pending} elapsed_us={elapsed_us}"));}
 pub(crate) fn decoder_lag_change(before:Option<u64>,after:u64,pending:usize){write_record("decoder_lag",&format!("before={before:?} after={after} pending_pts={pending}"));}
 pub(crate) fn decoder_empty_info(seq:u64,pending:usize,call_us:u64){write_record("decoder_empty",&format!("au={seq} pending_pts={pending} call_us={call_us}"));}
-pub(crate) fn decoder_restart_begin(before:u64){write_record("decoder_restart",&format!("TRIAL_CLEAN_IDR before_frames={before}"));}
-pub(crate) fn decoder_restart_result(before:u64,after_x100:u64,matched:u64){write_record("decoder_restart_result",&format!("before_frames={before} after_frames_x100={after_x100} matched={matched}"));}
-
+pub(crate) fn decoder_input_info(seq:u64,nal_mask:u32,vcl:bool,bytes:usize,packets:usize,gap_us:u64){write_record("decoder_empty_input",&format!("au={seq} nal_mask=0x{nal_mask:08x} vcl={vcl} bytes={bytes} rtp_packets={packets} submit_gap_us={gap_us}"));}
+pub(crate) fn decoder_input_window(calls:u64,non_vcl:u64,empty_vcl:u64,empty_non_vcl:u64){write_record("decoder_input_window",&format!("calls={calls} non_vcl={non_vcl} empty_vcl={empty_vcl} empty_non_vcl={empty_non_vcl}"));}
 pub(crate) fn decoder_public_hint(code:i32){write_record("decoder_public_hint",&format!("mode=0 return=0x{:08x} accepted={}",code as u32,code>=0));}

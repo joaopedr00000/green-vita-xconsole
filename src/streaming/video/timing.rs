@@ -33,3 +33,20 @@ pub(crate) fn pad_access_unit(data:&mut Vec<u8>)->Result<u32,&'static str>{
     }
     #[test]fn empty_is_rejected(){assert!(pad_access_unit(&mut vec![]).is_err());}
 }
+
+/// NAL types that contain coded slices (including extension types).
+/// Diagnostic classification only; no input bytes are filtered or changed.
+pub(crate) fn has_vcl(mask:u32)->bool{
+    const VCL_MASK:u32=(0b11111<<1)|(0b111<<19);
+    mask&VCL_MASK!=0
+}
+#[cfg(test)]mod nal_class_tests{
+    use super::*;
+    #[test]fn vcl_vs_headers(){
+        assert!(!has_vcl((1<<7)|(1<<8)|(1<<6)|(1<<9)));
+        assert!(has_vcl((1<<7)|(1<<8)|(1<<5)));
+        assert!(has_vcl(1<<1));
+        assert!(has_vcl(1<<20));
+        assert!(!has_vcl(0));
+    }
+}
