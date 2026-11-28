@@ -12,17 +12,17 @@ fn main() {
     }
 
 
-    // VitaSDK's linker script reserves this extra address-space gap before
-    // the writable segment for the module/import metadata added by vita-elf-create.
-    // Keep the gap independent of code size and native import count.
-    println!("cargo:rustc-link-arg=-Wl,--defsym=__sce_headroom=0x10000");
-
     // sceAvcdecSetLowDelayModeNongameapp lives in SceVideodecLowDelayUser (NID 0x6354EEFF),
     // not the SceVideodecUser library the SDK stub imports from. Assemble a correct import
     // stub (as/ar only; the SDK's C compiler is broken on this host).
     let vitasdk = PathBuf::from(env::var("VITASDK").expect("VITASDK env var is not set"));
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    // Older SDK linker scripts do not implement __sce_headroom.
+    // Insert a location-counter gap at the end of the read-only sections.
+    let gap_script=manifest_dir.join("vita-stubs/sce_gap.ld");
+    println!("cargo:rerun-if-changed=vita-stubs/sce_gap.ld");
+    println!("cargo:rustc-link-arg=-Wl,-T,{}",gap_script.display());
     let stub_src = manifest_dir.join("vita-stubs/SceVideodecLowDelayUser.S");
     let obj = out_dir.join("SceVideodecLowDelayUser.o");
     let lib = out_dir.join("libSceVideodecLowDelay_stub.a");

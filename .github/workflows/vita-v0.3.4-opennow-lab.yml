@@ -33,7 +33,15 @@ jobs:
         env:
           RUSTFLAGS: "-C target-feature=-neon"
           GREEN_VITA_BUILD: ${{ github.run_number }}
-        run: cargo vita build vpk --release
+        run: |
+          set +e
+          cargo vita build vpk --release
+          result=$?
+          elf=target/armv7-sony-vita-newlibeabihf/release/green-vita.elf
+          if [ -f "$elf" ]; then
+            "$VITASDK/bin/arm-vita-eabi-readelf" -lW "$elf" || true
+          fi
+          exit "$result"
       - name: Upload test package
         uses: actions/upload-artifact@v4
         with:
