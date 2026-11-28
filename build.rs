@@ -12,6 +12,11 @@ fn main() {
     }
 
 
+    // VitaSDK's linker script reserves this extra address-space gap before
+    // the writable segment for the module/import metadata added by vita-elf-create.
+    // Keep the gap independent of code size and native import count.
+    println!("cargo:rustc-link-arg=-Wl,--defsym=__sce_headroom=0x10000");
+
     // sceAvcdecSetLowDelayModeNongameapp lives in SceVideodecLowDelayUser (NID 0x6354EEFF),
     // not the SceVideodecUser library the SDK stub imports from. Assemble a correct import
     // stub (as/ar only; the SDK's C compiler is broken on this host).
