@@ -246,13 +246,14 @@ unsafe impl Send for PublicDecoder {}
 
 use std::time::Instant;
 use crate::streaming::hud::DecodeStages;
-use super::timing::Pending;
+use super::timing::{Pending,PtsClock};
 #[derive(Clone,Copy)]
 pub(super) struct FrameTiming{pub enqueued:Instant,pub stages:DecodeStages,pub generation:u64}
 
 pub struct HwVideoDecoder {
     backend: PublicDecoder,
-    pending: Pending<(FrameTiming,Instant)>,
+    pending: Pending<(FrameTiming,Instant,u64)>,
+    clock:PtsClock,period_us:u64,over_budget:u64,last_submit:Option<Instant>,empty_vcl:u64,empty_other:u64,
     seq:u64, outputs:u64, empty:u64, no_output:u32, peak_no_output:u32, peak_pending:usize,
     call_total_us:u64,call_max_us:u64,frame_lag_sum:u64,frame_lag_max:u64,matched:u64,wait_sum_us:u64,
     started:Instant,last_report:Instant,last_generation:Option<u64>,last_lag:Option<u64>,
@@ -263,21 +264,24 @@ impl HwVideoDecoder {
         let backend=PublicDecoder::new(config)?;
         crate::diagnostics::step("lab_decoder","PUBLIC");
         crate::diagnostics::decoder_config_info(config.decode_width,config.decode_height,config.output_width,config.output_height);
-        Ok(Self{backend,pending:Pending::new(),seq:0,outputs:0,empty:0,no_output:0,peak_no_output:0,peak_pending:0,
+        Ok(Self{backend,pending:Pending::new(),clock:PtsClock::default(),period_us:0,over_budget:0,last_submit:None,empty_vcl:0,empty_other:0,seq:0,outputs:0,empty:0,no_output:0,peak_no_output:0,peak_pending:0,
             call_total_us:0,call_max_us:0,frame_lag_sum:0,frame_lag_max:0,matched:0,wait_sum_us:0,
             started:Instant::now(),last_report:Instant::now(),last_generation:None,last_lag:None,
             ever_output:false})
     }
     pub(super) fn generation_changed(&self,generation:u64)->bool{self.last_generation.is_some_and(|g|g!=generation)}
-    pub fn decode(&mut self,data:&mut Vec<u8>,target:VideoTextureTarget,mut timing:FrameTiming)->Result<Option<FrameTiming>>{
+    pub fn decode(&mut self,data:&mut Vec<u8>,target:VideoTextureTarget,mut timing:FrameTiming,rtp_timestamp:u32,period:Option<u64>,nal_mask:u32)->Result<Option<FrameTiming>>{
         self.last_generation=Some(timing.generation);
         self.seq=self.seq.saturating_add(1);
-        let pts=self.seq.saturating_mul(super::AU_PTS_STEP);
+        let pts=self.clock.next(rtp_timestamp,period);
+        self.period_us=period.unwrap_or(0);
         let started=Instant::now();
+        let gap_us=self.last_submit.replace(started).map_or(0,|v|started.saturating_duration_since(v).as_micros() as u64);
+        let bytes=data.len();
         let returned=self.backend.decode(data,target,pts)?;
         let call_us=started.elapsed().as_micros() as u64;
         timing.stages.decode_us=call_us;
-        self.pending.push(pts,(timing,started));
+        self.pending.push(pts,(timing,started,self.seq));
         self.call_total_us=self.call_total_us.saturating_add(call_us);
         self.call_max_us=self.call_max_us.max(call_us);
         let result=if let Some(id)=returned{
@@ -286,8 +290,8 @@ impl HwVideoDecoder {
                 self.ever_output=true;
                 crate::diagnostics::decoder_startup_info(self.seq,self.pending.len(),self.started.elapsed().as_micros() as u64);
             }
-            if let Some((mut original,submitted))=self.pending.take(id){
-                let lag=pts.saturating_sub(id)/super::AU_PTS_STEP;
+            if let Some((mut original,submitted,ordinal))=self.pending.take(id){
+                let lag=self.seq.saturating_sub(ordinal);
                 if self.last_lag!=Some(lag){
                     crate::diagnostics::decoder_lag_change(self.last_lag,lag,self.pending.len());
                     self.last_lag=Some(lag);
@@ -297,6 +301,7 @@ impl HwVideoDecoder {
                 original.stages.verified=true;
                 original.stages.decoder_age_us=submitted.elapsed().as_micros() as u64;
                 original.stages.decoder_pending=self.pending.len() as u32;
+                if original.stages.decoder_age_us>100_000{self.over_budget+=1;}
                 self.wait_sum_us=self.wait_sum_us.saturating_add(original.stages.decoder_age_us.saturating_sub(original.stages.decode_us));
                 if original.generation==timing.generation{Some(original)}else{None}
             }else{
@@ -304,11 +309,13 @@ impl HwVideoDecoder {
                 None
             }
         }else{
-            self.empty+=1;self.no_output=self.no_output.saturating_add(1);
+            self.empty+=1;if super::timing::has_vcl(nal_mask){self.empty_vcl+=1;}else{self.empty_other+=1;}
+            self.no_output=self.no_output.saturating_add(1);
             self.peak_no_output=self.peak_no_output.max(self.no_output);
             // Log the first no-output event after warmup; no speculative frame skips.
-            if self.ever_output && self.no_output==1{
+            if self.seq<=8 || (self.ever_output && self.no_output==1){
                 crate::diagnostics::decoder_empty_info(self.seq,self.pending.len(),call_us);
+                crate::diagnostics::decoder_cadence_input(self.seq,pts,self.period_us,gap_us,nal_mask,bytes);
             }
             None
         };
@@ -319,9 +326,11 @@ impl HwVideoDecoder {
             super::metrics::record_decoder_window(super::metrics::DecoderWindow{
                 pending:self.pending.len() as u64,lag_x100,call_us:self.call_total_us/calls.max(1),
                 wait_us:self.wait_sum_us/self.matched.max(1),matched:self.matched,
-                calls,at:Some(Instant::now()),
+                calls,period_us:self.period_us,over_budget:self.over_budget,at:Some(Instant::now()),
             });
             crate::diagnostics::decoder_buffer_info(self.outputs,self.empty,self.peak_no_output,self.pending.len(),self.peak_pending,self.call_total_us/calls.max(1),self.call_max_us,lag_x100,self.frame_lag_max);
+            crate::diagnostics::decoder_cadence_window(self.period_us,self.over_budget,self.matched,self.empty_vcl,self.empty_other);
+            self.over_budget=0;self.empty_vcl=0;self.empty_other=0;
             self.last_report=Instant::now();self.outputs=0;self.empty=0;self.peak_no_output=self.no_output;
             self.peak_pending=self.pending.len();self.call_total_us=0;self.call_max_us=0;
             self.frame_lag_sum=0;self.frame_lag_max=0;self.matched=0;self.wait_sum_us=0;

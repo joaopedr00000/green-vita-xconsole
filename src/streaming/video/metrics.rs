@@ -90,10 +90,10 @@ pub(crate) fn summary(m:&crate::streaming::hud::PlaybackMetrics)->String {
 #[derive(Clone,Copy,Debug,Default)]
 pub(crate) struct DecoderWindow{
     pub pending:u64,pub lag_x100:u64,pub call_us:u64,pub wait_us:u64,pub matched:u64,
-    pub calls:u64,
+    pub calls:u64,pub period_us:u64,pub over_budget:u64,
     pub at:Option<std::time::Instant>,
 }
-static DECODER_WINDOW:Mutex<DecoderWindow>=Mutex::new(DecoderWindow{pending:0,lag_x100:0,call_us:0,wait_us:0,matched:0,calls:0,at:None});
+static DECODER_WINDOW:Mutex<DecoderWindow>=Mutex::new(DecoderWindow{pending:0,lag_x100:0,call_us:0,wait_us:0,matched:0,calls:0,period_us:0,over_budget:0,at:None});
 pub(crate) fn record_decoder_window(w:DecoderWindow){if let Ok(mut slot)=DECODER_WINDOW.try_lock(){*slot=w;}}
 pub(crate) fn decoder_window()->Option<DecoderWindow>{
     let w=*DECODER_WINDOW.try_lock().ok()?;

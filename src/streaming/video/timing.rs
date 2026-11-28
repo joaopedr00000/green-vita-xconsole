@@ -33,3 +33,60 @@ pub(crate) fn pad_access_unit(data:&mut Vec<u8>)->Result<u32,&'static str>{
     }
     #[test]fn empty_is_rejected(){assert!(pad_access_unit(&mut vec![]).is_err());}
 }
+
+// RTP video timestamps use a 90 kHz clock. Maintain monotonic decoder IDs,
+// including RTP wraparound and discontinuities; never infer returned identity.
+#[derive(Default)]
+pub(crate) struct PtsClock{last:Option<u32>,pts:u64}
+impl PtsClock{
+    pub fn next(&mut self,rtp:u32,period_us:Option<u64>)->u64{
+        let nominal=period_us.filter(|v|(8_000..=100_000).contains(v)).map(|v|v*90/1000).unwrap_or(1500);
+        let step=self.last.replace(rtp).map(|old|u64::from(rtp.wrapping_sub(old))).filter(|d|(720..=9000).contains(d)).unwrap_or(nominal);
+        self.pts=self.pts.saturating_add(step.max(1));self.pts
+    }
+}
+/// Switch only after eight consistent RTP frame intervals; isolated gaps don't
+/// change cadence. Intermediate rates retain the existing smoothed estimate.
+#[derive(Default)]
+pub(crate) struct Cadence{active:u8,candidate:u8,run:u8}
+impl Cadence{
+    pub fn observe(&mut self,us:u64)->Option<(u8,u8)>{
+        let rate=match us{13_000..=20_000=>60,27_000..=40_000=>30,_=>0};
+        if rate==0 || rate==self.active{self.candidate=0;self.run=0;return None;}
+        if self.candidate!=rate{self.candidate=rate;self.run=1;}else{self.run=self.run.saturating_add(1);}
+        if self.run<8{return None;}
+        let old=self.active;self.active=rate;self.run=0;Some((old,rate))
+    }
+    pub fn period(&self,fallback:Option<u64>)->Option<u64>{match self.active{30=>Some(33_333),60=>Some(16_667),_=>fallback}}
+}
+/// Limit compressed input backlog by duration, not a fixed frame count.
+pub(crate) fn queue_limit(period:Option<u64>)->usize{
+    let us=period.filter(|v|(8_000..=100_000).contains(v)).unwrap_or(33_333);
+    (80_000/us).clamp(2,6) as usize
+}
+pub(crate) fn has_vcl(mask:u32)->bool{mask&((0b11111<<1)|(0b111<<19))!=0}
+#[cfg(test)]mod cadence_tests{
+    use super::*;
+    #[test]fn pts_tracks_rates_wrap_and_discontinuity(){
+        let mut c=PtsClock::default();
+        let a=c.next(u32::MAX-999,Some(16_667));
+        let b=c.next(500,Some(16_667));assert_eq!(b-a,1500);
+        let d=c.next(3500,Some(33_333));assert_eq!(d-b,3000);
+        let e=c.next(100_000,Some(33_333));assert_eq!(e-d,2999);
+        assert!(c.next(100_000,Some(33_333))>e);
+    }
+    #[test]fn hysteresis_and_queue_budget(){
+        let mut c=Cadence::default();
+        for _ in 0..7{assert_eq!(c.observe(16_667),None);}
+        assert_eq!(c.observe(16_667),Some((0,60)));
+        assert_eq!(c.observe(33_333),None);assert_eq!(c.observe(16_667),None);
+        for _ in 0..7{assert_eq!(c.observe(33_333),None);}
+        assert_eq!(c.observe(33_333),Some((60,30)));
+        assert_eq!(c.period(None),Some(33_333));
+        for _ in 0..7{assert_eq!(c.observe(16_667),None);}
+        assert_eq!(c.observe(16_667),Some((30,60)));
+        assert_eq!(queue_limit(Some(33_333)),2);assert_eq!(queue_limit(Some(16_667)),4);
+        assert_eq!(queue_limit(None),2);assert_eq!(queue_limit(Some(0)),2);
+    }
+    #[test]fn nal_classification(){assert!(!has_vcl((1<<7)|(1<<8)));assert!(has_vcl(1<<5));assert!(has_vcl(1<<1));}
+}

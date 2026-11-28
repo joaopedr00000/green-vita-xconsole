@@ -18,6 +18,7 @@ struct QueuedAccessUnit {
     queued_at: Instant,
     source_duration_us:Option<u64>,
     clean_idr:bool,
+    rtp_timestamp:u32,nal_mask:u32,
     generation: u64,
 }
 
@@ -79,18 +80,8 @@ impl VideoDecodeWorker {
         })
     }
 
-    pub fn submit_access_unit(&self, data: Vec<u8>, source_frame_duration_us: Option<u64>,clean_idr:bool) -> bool {
-        let source_fps = source_frame_duration_us
-            .filter(|duration| *duration > 0)
-            .map(|duration| 1_000_000 / duration)
-            .unwrap_or(30);
-        let extra_capacity = source_fps
-            .saturating_sub(30)
-            .min(25)
-            .saturating_mul((MAX_PENDING_ACCESS_UNITS - MIN_PENDING_ACCESS_UNITS) as u64)
-            .saturating_add(12)
-            / 25;
-        let pending_limit = MIN_PENDING_ACCESS_UNITS + extra_capacity as usize;
+    pub fn submit_access_unit(&self, data: Vec<u8>, source_frame_duration_us: Option<u64>,clean_idr:bool,rtp_timestamp:u32,nal_mask:u32) -> bool {
+        let pending_limit=super::timing::queue_limit(source_frame_duration_us);
         if self.access_units.len() >= pending_limit {
             metrics::METRICS.queue_full.fetch_add(1, Ordering::Relaxed);
             return false;
@@ -100,7 +91,7 @@ impl VideoDecodeWorker {
             data,
             queued_at: Instant::now(),
             source_duration_us:source_frame_duration_us,
-            clean_idr,
+            clean_idr,rtp_timestamp,nal_mask,
             generation: self.generation.load(Ordering::Acquire),
         };
         match self.access_units.try_send(access_unit) {
@@ -240,7 +231,7 @@ fn decode_queued_access_unit(
     let decode_started_at = Instant::now();
     let stages=crate::streaming::hud::DecodeStages {queue_us:dequeued_at.saturating_duration_since(access_unit.queued_at).as_micros() as u64,texture_us:texture_acquired_at.saturating_duration_since(texture_started_at).as_micros() as u64,decode_us:0,..Default::default()};
     let timing=FrameTiming{enqueued:access_unit.queued_at,stages,generation:access_unit.generation};
-    let decode_result=catch_unwind(AssertUnwindSafe(||decoder.as_mut().expect("decoder recreated above").decode(&mut access_unit.data,direct_target.target(),timing)));
+    let decode_result=catch_unwind(AssertUnwindSafe(||decoder.as_mut().expect("decoder recreated above").decode(&mut access_unit.data,direct_target.target(),timing,access_unit.rtp_timestamp,access_unit.source_duration_us,access_unit.nal_mask)));
     let decode_finished_at=Instant::now();
     if access_unit.generation != generation.load(Ordering::Acquire) {
         return;

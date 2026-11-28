@@ -78,6 +78,8 @@ pub(super) struct VideoRtp {
     last_frame_timestamp: Option<u32>,
     source_frame_duration_us: Option<u64>,
     damage_score: u8,
+    cadence:crate::streaming::video::timing::Cadence,
+    needs_clean_idr:bool, startup_skipped:u64,
     stream_too_large: bool,
     waiting_for_keyframe: bool,
     held_future: Vec<Packet>,
@@ -178,6 +180,7 @@ impl VideoRtp {
             last_frame_timestamp: None,
             source_frame_duration_us: None,
             damage_score: 0,
+            cadence:Default::default(),needs_clean_idr:true,startup_skipped:0,
             stream_too_large: false,
             waiting_for_keyframe: false,
             held_future: Vec::new(),
@@ -195,6 +198,7 @@ impl VideoRtp {
     }
 
     pub(super) fn wait_for_keyframe(&mut self) {
+        self.needs_clean_idr=true;
         self.waiting_for_keyframe = true;
     }
 
@@ -323,7 +327,8 @@ impl VideoRtp {
             u64::from(completed.timestamp.wrapping_sub(previous)) * 1_000_000
                 / u64::from(VIDEO_RTP_CLOCK_RATE)
         });
-        if let Some(duration) = stats.source_frame_duration_us {
+        if let Some(duration) = stats.source_frame_duration_us.filter(|d|(8_000..=100_000).contains(d)) {
+            if let Some((old,new))=self.cadence.observe(duration){crate::diagnostics::cadence_change(old,new);}
             self.source_frame_duration_us = Some(
                 self.source_frame_duration_us
                     .map(|average| (average * 7 + duration) / 8)
@@ -362,6 +367,12 @@ impl VideoRtp {
             }
             self.stream_too_large = false;
         }
+        let clean_idr=unit.has_idr&&unit.has_pps&&unit.resolution.is_some_and(|(w,h)|w>0&&h>0&&w<=STREAM_WIDTH&&h<=STREAM_HEIGHT);
+        if self.needs_clean_idr&&!clean_idr{
+            self.startup_skipped=self.startup_skipped.saturating_add(1);
+            *keyframe_requested=true;
+            return stats;
+        }
         if self.waiting_for_keyframe {
             // Later keyframes may contain only IDR; AVCDEC retains SPS/PPS across resyncs.
             if !unit.has_idr {
@@ -379,11 +390,18 @@ impl VideoRtp {
             inspect_decoder_sps(&data);
             if unit.has_idr {crate::diagnostics::decoder_negotiated_info(w,h,unit.has_pps);}
         }
-        let clean_idr=unit.has_idr&&unit.has_pps&&unit.resolution.is_some_and(|(w,h)|w>0&&h>0&&w<=STREAM_WIDTH&&h<=STREAM_HEIGHT);
-        if !worker.submit_access_unit(data.to_vec(), self.source_frame_duration_us,clean_idr) {
-            eprintln!("Video decoder queue is full; continuing while requesting a keyframe");
+        let period=self.cadence.period(self.source_frame_duration_us);
+        if !worker.submit_access_unit(data.to_vec(),period,clean_idr,completed.timestamp,unit.nal_mask) {
+            // A lost compressed reference cannot safely be followed by more P frames.
+            // Invalidate queued generation and request a self-contained IDR.
+            worker.begin_resync();self.waiting_for_keyframe=true;self.needs_clean_idr=true;
+            crate::diagnostics::step("decoder_queue","BUDGET_FULL_RESYNC");
             *keyframe_requested = true;
             stats.dropped = stats.dropped.saturating_add(1);
+        }else if self.needs_clean_idr{
+            self.needs_clean_idr=false;
+            crate::diagnostics::decoder_clean_start(self.startup_skipped,period.unwrap_or(0));
+            self.startup_skipped=0;
         }
         stats
     }
@@ -427,6 +445,7 @@ fn timestamp_is_newer(candidate: u32, reference: u32) -> bool {
 struct AccessUnitInfo {
     has_idr: bool,
     has_pps:bool,
+    nal_mask:u32,
     resolution: Option<(u32, u32)>,
 }
 
@@ -434,13 +453,15 @@ fn inspect_h264_access_unit(data: &[u8]) -> AccessUnitInfo {
     let mut info = AccessUnitInfo {
         has_idr: false,
         has_pps:false,
+        nal_mask:0,
         resolution: None,
     };
     let mut reader = AnnexBReader::accumulate(|nal: RefNal<'_>| {
         let Ok(header) = nal.header() else {
             return NalInterest::Ignore;
         };
-        match header.nal_unit_type() {
+        let kind=header.nal_unit_type();info.nal_mask|=1u32<<kind.id();
+        match kind {
             UnitType::SliceLayerWithoutPartitioningIdr => {
                 info.has_idr = true;
                 NalInterest::Ignore

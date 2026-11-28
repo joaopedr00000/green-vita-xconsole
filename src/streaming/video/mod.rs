@@ -1,5 +1,5 @@
 mod decoder;
-mod timing;
+pub(crate) mod timing;
 pub const AVCDEC_NUM_REF_FRAMES:u32=1;
 pub const AU_PTS_STEP:u64=1500;
 mod memory;
