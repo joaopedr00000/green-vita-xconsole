@@ -375,8 +375,12 @@ impl VideoRtp {
             self.damage_score = self.damage_score.saturating_sub(1);
         }
 
-        if unit.resolution.is_some() { inspect_decoder_sps(&data); }
-        if !worker.submit_access_unit(data.to_vec(), self.source_frame_duration_us) {
+        if let Some((w,h))=unit.resolution {
+            inspect_decoder_sps(&data);
+            if unit.has_idr {crate::diagnostics::decoder_negotiated_info(w,h,unit.has_pps);}
+        }
+        let clean_idr=unit.has_idr&&unit.has_pps&&unit.resolution.is_some_and(|(w,h)|w>0&&h>0&&w<=STREAM_WIDTH&&h<=STREAM_HEIGHT);
+        if !worker.submit_access_unit(data.to_vec(), self.source_frame_duration_us,clean_idr) {
             eprintln!("Video decoder queue is full; continuing while requesting a keyframe");
             *keyframe_requested = true;
             stats.dropped = stats.dropped.saturating_add(1);
@@ -422,12 +426,14 @@ fn timestamp_is_newer(candidate: u32, reference: u32) -> bool {
 
 struct AccessUnitInfo {
     has_idr: bool,
+    has_pps:bool,
     resolution: Option<(u32, u32)>,
 }
 
 fn inspect_h264_access_unit(data: &[u8]) -> AccessUnitInfo {
     let mut info = AccessUnitInfo {
         has_idr: false,
+        has_pps:false,
         resolution: None,
     };
     let mut reader = AnnexBReader::accumulate(|nal: RefNal<'_>| {
@@ -439,6 +445,7 @@ fn inspect_h264_access_unit(data: &[u8]) -> AccessUnitInfo {
                 info.has_idr = true;
                 NalInterest::Ignore
             }
+            UnitType::PicParameterSet => { info.has_pps=true; NalInterest::Ignore }
             UnitType::SeqParameterSet => {
                 if nal.is_complete() {
                     info.resolution = SeqParameterSet::from_bits(nal.rbsp_bits())

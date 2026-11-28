@@ -17,6 +17,7 @@ struct QueuedAccessUnit {
     data: Vec<u8>,
     queued_at: Instant,
     source_duration_us:Option<u64>,
+    clean_idr:bool,
     generation: u64,
 }
 
@@ -78,7 +79,7 @@ impl VideoDecodeWorker {
         })
     }
 
-    pub fn submit_access_unit(&self, data: Vec<u8>, source_frame_duration_us: Option<u64>) -> bool {
+    pub fn submit_access_unit(&self, data: Vec<u8>, source_frame_duration_us: Option<u64>,clean_idr:bool) -> bool {
         let source_fps = source_frame_duration_us
             .filter(|duration| *duration > 0)
             .map(|duration| 1_000_000 / duration)
@@ -99,6 +100,7 @@ impl VideoDecodeWorker {
             data,
             queued_at: Instant::now(),
             source_duration_us:source_frame_duration_us,
+            clean_idr,
             generation: self.generation.load(Ordering::Acquire),
         };
         match self.access_units.try_send(access_unit) {
@@ -161,6 +163,7 @@ fn run_decode_loop(
     direct_output: Arc<DirectVideoOutput>,
 ) {
     let mut decoder = Some(initial_decoder);
+    let mut restart_trial_used=false;
 
     loop {
         select_biased! {
@@ -183,6 +186,7 @@ fn run_decode_loop(
                     access_unit,
                     &direct_output,
                     access_units.len(),
+                    &mut restart_trial_used,
                 );
             }
         }
@@ -198,15 +202,30 @@ fn decode_queued_access_unit(
     access_unit: QueuedAccessUnit,
     direct_output: &DirectVideoOutput,
     remaining:usize,
+    restart_trial_used:&mut bool,
 ) {
     if access_unit.generation != generation.load(Ordering::Acquire) {
         return;
     }
 
     let dequeued_at=Instant::now();
+    // A single controlled restart at a naturally arriving self-contained IDR.
+    // Never drain reference pictures or discard arbitrary compressed P frames.
+    let trial=access_unit.clean_idr && !*restart_trial_used &&
+        decoder.as_ref().is_some_and(HwVideoDecoder::trial_ready);
+    let resync=access_unit.clean_idr &&
+        decoder.as_ref().is_some_and(|d|d.generation_changed(access_unit.generation));
+    let trial_lag=if trial && !resync {decoder.as_ref().and_then(HwVideoDecoder::lag)}else{None};
+    if trial_lag.is_some() || resync{
+        if let Some(before)=trial_lag{
+            *restart_trial_used=true;
+            crate::diagnostics::decoder_restart_begin(before);
+        }else{crate::diagnostics::step("decoder_restart","CLEAN_IDR_RESYNC");}
+        *decoder=None;
+    }
     if decoder.is_none() {
         match HwVideoDecoder::new(config) {
-            Ok(new_decoder) => *decoder = Some(new_decoder),
+            Ok(mut new_decoder) => {if let Some(before)=trial_lag{new_decoder.mark_trial(before);} *decoder = Some(new_decoder);},
             Err(error) => {
                 publish_result(
                     latest_result,
@@ -220,7 +239,7 @@ fn decode_queued_access_unit(
 
     let texture_started_at=Instant::now();
     let wait_ms=crate::streaming::policy::experimental_texture_wait_ms(crate::settings::latency_mode(),dequeued_at.saturating_duration_since(access_unit.queued_at).as_micros() as u64,remaining,access_unit.source_duration_us);
-    let Some(direct_target) = direct_output.lock_decode_target(wait_ms,decoder.as_ref().is_some_and(HwVideoDecoder::allow_two)) else {
+    let Some(direct_target) = direct_output.lock_decode_target(wait_ms) else {
         // Do not decode until the renderer has registered its three GXM textures. There is no
         // legacy output buffer to copy from anymore.
         metrics::METRICS.skipped.fetch_add(1, Ordering::Relaxed);
@@ -230,17 +249,17 @@ fn decode_queued_access_unit(
     let decode_started_at = Instant::now();
     let stages=crate::streaming::hud::DecodeStages {queue_us:dequeued_at.saturating_duration_since(access_unit.queued_at).as_micros() as u64,texture_us:decode_started_at.saturating_duration_since(texture_started_at).as_micros() as u64,decode_us:0,..Default::default()};
     let timing=FrameTiming{enqueued:access_unit.queued_at,stages,generation:access_unit.generation};
-    let decode_result=catch_unwind(AssertUnwindSafe(||decoder.as_mut().expect("decoder recreated above").decode(&access_unit.data,direct_target.targets(),timing)));
+    let decode_result=catch_unwind(AssertUnwindSafe(||decoder.as_mut().expect("decoder recreated above").decode(&access_unit.data,direct_target.target(),timing)));
     let decode_finished_at=Instant::now();
     if access_unit.generation != generation.load(Ordering::Acquire) {
         return;
     }
 
     match decode_result {
-        Ok(Ok(Some((slot,timing)))) if timing.generation==generation.load(Ordering::Acquire) => {
+        Ok(Ok(Some(timing))) if timing.generation==generation.load(Ordering::Acquire) => {
             metrics::METRICS.decode_us.store(timing.stages.decode_us,Ordering::Relaxed);
             metrics::METRICS.decoded.fetch_add(1, Ordering::Relaxed);
-            let frame = direct_target.publish(slot,decode_finished_at,timing.enqueued,timing.stages);
+            let frame = direct_target.publish(decode_finished_at,timing.enqueued,timing.stages);
             metrics::METRICS.pipeline_age_us.store(
                 if timing.stages.verified{timing.enqueued.elapsed().as_micros() as u64}else{0},
                 Ordering::Relaxed,

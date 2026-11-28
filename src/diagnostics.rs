@@ -211,6 +211,11 @@ pub(crate) fn decoder_sps_info(profile:u8,flags:u8,level:u8,refs:u32,restriction
     write_record("decoder_sps",&format!("profile={profile} flags={flags:02x} level={level} refs={refs} restriction={restriction:?} poc2={poc2} tightened={applied}"));
 }
 
-pub(crate) fn decoder_dual_info(calls:u64,dual_calls:u64,dual_outputs:u64){
-    write_record("decoder_dual",&format!("calls={calls} two_targets={dual_calls} two_outputs={dual_outputs}"));
-}
+
+pub(crate) fn decoder_config_info(w:u32,h:u32,ow:u32,oh:u32){write_record("decoder_config",&format!("decode={w}x{h} output={ow}x{oh} refs=1 output_slots=1"));}
+pub(crate) fn decoder_negotiated_info(w:u32,h:u32,pps:bool){write_record("decoder_negotiated",&format!("idr={w}x{h} pps={pps}"));}
+pub(crate) fn decoder_startup_info(seq:u64,pending:usize,elapsed_us:u64){write_record("decoder_startup",&format!("first_output_au={seq} pending_pts={pending} elapsed_us={elapsed_us}"));}
+pub(crate) fn decoder_lag_change(before:Option<u64>,after:u64,pending:usize){write_record("decoder_lag",&format!("before={before:?} after={after} pending_pts={pending}"));}
+pub(crate) fn decoder_empty_info(seq:u64,pending:usize,call_us:u64){write_record("decoder_empty",&format!("au={seq} pending_pts={pending} call_us={call_us}"));}
+pub(crate) fn decoder_restart_begin(before:u64){write_record("decoder_restart",&format!("TRIAL_CLEAN_IDR before_frames={before}"));}
+pub(crate) fn decoder_restart_result(before:u64,after_x100:u64,matched:u64){write_record("decoder_restart_result",&format!("before_frames={before} after_frames_x100={after_x100} matched={matched}"));}
