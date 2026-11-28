@@ -232,3 +232,5 @@ pub(crate) fn decoder_lag_change(before:Option<u64>,after:u64,pending:usize){wri
 pub(crate) fn decoder_empty_info(seq:u64,pending:usize,call_us:u64){write_record("decoder_empty",&format!("au={seq} pending_pts={pending} call_us={call_us}"));}
 pub(crate) fn decoder_restart_begin(before:u64){write_record("decoder_restart",&format!("TRIAL_CLEAN_IDR before_frames={before}"));}
 pub(crate) fn decoder_restart_result(before:u64,after_x100:u64,matched:u64){write_record("decoder_restart_result",&format!("before_frames={before} after_frames_x100={after_x100} matched={matched}"));}
+
+pub(crate) fn decoder_public_hint(code:i32){write_record("decoder_public_hint",&format!("mode=0 return=0x{:08x} accepted={}",code as u32,code>=0));}

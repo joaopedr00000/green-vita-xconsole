@@ -5,6 +5,13 @@ use anyhow::{Result, bail};
 use std::os::raw::c_void;
 use vitasdk_sys::*;
 
+// Same pre-initialization hint as Moonlight Vita's public <=720p path.
+// This does not select the previously rejected internal decoder backend.
+unsafe extern "C" {
+    #[link_name="sceAvcdecSetLowDelayModeNongameapp_ld"]
+    fn public_low_delay_hint(codec_type:SceVideodecType,mode:i32)->i32;
+}
+
 // The idea of reducing the reference frames came from MattKC on his Vanilla project
 // Make sure to check it out, good content :)
 const AVCDEC_NUM_REF_FRAMES: u32 = 1;
@@ -43,6 +50,9 @@ impl AvcdecLibrary {
             numOfRefFrames: AVCDEC_NUM_REF_FRAMES,
             numOfStreams: 1,
         };
+        let hint=unsafe{public_low_delay_hint(SCE_VIDEODEC_TYPE_HW_AVCDEC,0)};
+        crate::diagnostics::decoder_public_hint(hint);
+        // Rejection is nonfatal: keep using the normal public API.
         let ret = unsafe { sceVideodecInitLibrary(SCE_VIDEODEC_TYPE_HW_AVCDEC, &init_info) };
         if ret < 0 {
             if module_loaded {
@@ -257,6 +267,7 @@ pub struct HwVideoDecoder {
     call_total_us:u64,call_max_us:u64,frame_lag_sum:u64,frame_lag_max:u64,matched:u64,wait_sum_us:u64,
     started:Instant,last_report:Instant,last_generation:Option<u64>,total_matched:u64,last_lag:Option<u64>,
     ever_output:bool,recovery_baseline:Option<u64>,recovery_reported:bool,
+    stable_lag_since:Instant,
 }
 impl HwVideoDecoder {
     pub fn new(config:DecoderConfig)->Result<Self>{
@@ -266,12 +277,12 @@ impl HwVideoDecoder {
         Ok(Self{backend,pending:Pending::new(),seq:0,outputs:0,empty:0,no_output:0,peak_no_output:0,peak_pending:0,
             call_total_us:0,call_max_us:0,frame_lag_sum:0,frame_lag_max:0,matched:0,wait_sum_us:0,
             started:Instant::now(),last_report:Instant::now(),last_generation:None,total_matched:0,last_lag:None,
-            ever_output:false,recovery_baseline:None,recovery_reported:false})
+            ever_output:false,recovery_baseline:None,recovery_reported:false,stable_lag_since:Instant::now()})
     }
     pub(super) fn lag(&self)->Option<u64>{self.last_lag}
     pub(super) fn generation_changed(&self,generation:u64)->bool{self.last_generation.is_some_and(|g|g!=generation)}
     pub(super) fn trial_ready(&self)->bool{
-        crate::streaming::policy::decoder_restart_probe(false,true,self.last_lag.unwrap_or(0),self.total_matched,self.started.elapsed().as_secs())
+        crate::streaming::policy::decoder_restart_probe(false,true,self.last_lag.unwrap_or(0),self.total_matched,self.started.elapsed().as_secs(),self.stable_lag_since.elapsed().as_secs())
     }
     pub(super) fn mark_trial(&mut self,baseline:u64){self.recovery_baseline=Some(baseline);}
     pub fn decode(&mut self,data:&mut Vec<u8>,target:VideoTextureTarget,mut timing:FrameTiming)->Result<Option<FrameTiming>>{
@@ -296,6 +307,7 @@ impl HwVideoDecoder {
                 if self.last_lag!=Some(lag){
                     crate::diagnostics::decoder_lag_change(self.last_lag,lag,self.pending.len());
                     self.last_lag=Some(lag);
+                    self.stable_lag_since=Instant::now();
                 }
                 self.frame_lag_sum=self.frame_lag_sum.saturating_add(lag);
                 self.frame_lag_max=self.frame_lag_max.max(lag);self.matched+=1;self.total_matched+=1;
