@@ -18,6 +18,9 @@ fn main() {
     let vitasdk = PathBuf::from(env::var("VITASDK").expect("VITASDK env var is not set"));
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let gap_script=manifest_dir.join("vita-stubs/sce_gap.ld");
+    println!("cargo:rerun-if-changed=vita-stubs/sce_gap.ld");
+    println!("cargo:rustc-link-arg=-Wl,-T,{}",gap_script.display());
     let stub_src = manifest_dir.join("vita-stubs/SceVideodecLowDelayUser.S");
     let obj = out_dir.join("SceVideodecLowDelayUser.o");
     let lib = out_dir.join("libSceVideodecLowDelay_stub.a");

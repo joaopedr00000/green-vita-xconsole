@@ -255,8 +255,8 @@ pub struct HwVideoDecoder {
     pending: Pending<(FrameTiming,Instant)>,
     seq:u64, outputs:u64, empty:u64, no_output:u32, peak_no_output:u32, peak_pending:usize,
     call_total_us:u64,call_max_us:u64,frame_lag_sum:u64,frame_lag_max:u64,matched:u64,wait_sum_us:u64,
-    started:Instant,last_report:Instant,last_generation:Option<u64>,total_matched:u64,last_lag:Option<u64>,
-    ever_output:bool,recovery_baseline:Option<u64>,recovery_reported:bool,
+    started:Instant,last_report:Instant,last_generation:Option<u64>,last_lag:Option<u64>,
+    ever_output:bool,
 }
 impl HwVideoDecoder {
     pub fn new(config:DecoderConfig)->Result<Self>{
@@ -265,15 +265,10 @@ impl HwVideoDecoder {
         crate::diagnostics::decoder_config_info(config.decode_width,config.decode_height,config.output_width,config.output_height);
         Ok(Self{backend,pending:Pending::new(),seq:0,outputs:0,empty:0,no_output:0,peak_no_output:0,peak_pending:0,
             call_total_us:0,call_max_us:0,frame_lag_sum:0,frame_lag_max:0,matched:0,wait_sum_us:0,
-            started:Instant::now(),last_report:Instant::now(),last_generation:None,total_matched:0,last_lag:None,
-            ever_output:false,recovery_baseline:None,recovery_reported:false})
+            started:Instant::now(),last_report:Instant::now(),last_generation:None,last_lag:None,
+            ever_output:false})
     }
-    pub(super) fn lag(&self)->Option<u64>{self.last_lag}
     pub(super) fn generation_changed(&self,generation:u64)->bool{self.last_generation.is_some_and(|g|g!=generation)}
-    pub(super) fn trial_ready(&self)->bool{
-        crate::streaming::policy::decoder_restart_probe(false,true,self.last_lag.unwrap_or(0),self.total_matched,self.started.elapsed().as_secs())
-    }
-    pub(super) fn mark_trial(&mut self,baseline:u64){self.recovery_baseline=Some(baseline);}
     pub fn decode(&mut self,data:&mut Vec<u8>,target:VideoTextureTarget,mut timing:FrameTiming)->Result<Option<FrameTiming>>{
         self.last_generation=Some(timing.generation);
         self.seq=self.seq.saturating_add(1);
@@ -298,7 +293,7 @@ impl HwVideoDecoder {
                     self.last_lag=Some(lag);
                 }
                 self.frame_lag_sum=self.frame_lag_sum.saturating_add(lag);
-                self.frame_lag_max=self.frame_lag_max.max(lag);self.matched+=1;self.total_matched+=1;
+                self.frame_lag_max=self.frame_lag_max.max(lag);self.matched+=1;
                 original.stages.verified=true;
                 original.stages.decoder_age_us=submitted.elapsed().as_micros() as u64;
                 original.stages.decoder_pending=self.pending.len() as u32;
@@ -321,14 +316,10 @@ impl HwVideoDecoder {
         if self.last_report.elapsed().as_secs()>=5{
             let calls=self.outputs+self.empty;
             let lag_x100=self.frame_lag_sum.saturating_mul(100)/self.matched.max(1);
-            if let Some(before)=self.recovery_baseline.filter(|_|!self.recovery_reported&&self.matched>=60){
-                crate::diagnostics::decoder_restart_result(before,lag_x100,self.matched);
-                self.recovery_reported=true;
-            }
             super::metrics::record_decoder_window(super::metrics::DecoderWindow{
                 pending:self.pending.len() as u64,lag_x100,call_us:self.call_total_us/calls.max(1),
                 wait_us:self.wait_sum_us/self.matched.max(1),matched:self.matched,
-                restart_trial:self.recovery_baseline.is_some(),calls,at:Some(Instant::now()),
+                calls,at:Some(Instant::now()),
             });
             crate::diagnostics::decoder_buffer_info(self.outputs,self.empty,self.peak_no_output,self.pending.len(),self.peak_pending,self.call_total_us/calls.max(1),self.call_max_us,lag_x100,self.frame_lag_max);
             self.last_report=Instant::now();self.outputs=0;self.empty=0;self.peak_no_output=self.no_output;

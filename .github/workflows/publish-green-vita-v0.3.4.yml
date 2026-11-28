@@ -1,0 +1,75 @@
+name: Publish GreenVita v0.3.4 Final
+on:
+  push:
+    branches: [vita-v0.3.4-final]
+    paths: [.github/workflows/publish-green-vita-v0.3.4.yml]
+permissions:
+  contents: read
+concurrency:
+  group: green-vita-v034-final-publish
+  cancel-in-progress: false
+jobs:
+  input-policy-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustc --edition=2024 --test src/api_xbox/auth_retry.rs -o /tmp/green-vita-auth-tests && /tmp/green-vita-auth-tests
+      - run: rustc --edition=2024 --test src/streaming/input.rs -o /tmp/green-vita-input-tests && /tmp/green-vita-input-tests
+      - run: rustc --edition=2024 --test src/streaming/policy.rs -o /tmp/green-vita-policy-tests && /tmp/green-vita-policy-tests
+      - run: rustc --edition=2024 --test src/streaming/hud.rs -o /tmp/green-vita-hud-tests && /tmp/green-vita-hud-tests
+      - run: rustc --edition=2024 --test src/diagnostics/retention.rs -o /tmp/green-vita-retention-tests && /tmp/green-vita-retention-tests
+      - run: rustc --edition=2024 --test src/streaming/video/timing.rs -o /tmp/green-vita-timing-tests && /tmp/green-vita-timing-tests
+      - run: rustc --edition=2024 --test src/streaming/benchmark.rs -o /tmp/green-vita-benchmark-tests && /tmp/green-vita-benchmark-tests
+  build:
+    needs: input-policy-tests
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/vita-rust/vitasdk-rs:latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Compile candidate VPK
+        env:
+          RUSTFLAGS: "-C target-feature=-neon"
+          GREEN_VITA_BUILD: "034"
+        run: cargo vita build vpk --release
+      - name: Upload test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: GreenVita-0.3.4-Final
+          path: target/armv7-sony-vita-newlibeabihf/release/green-vita.vpk
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: GreenVita-0.3.4-Final
+          path: dist
+      - name: Verify VPK and generate checksum
+        run: |
+          set -euo pipefail
+          grep -q '^version = "0.3.4"$' Cargo.toml
+          test -s dist/green-vita.vpk
+          unzip -tq dist/green-vita.vpk
+          unzip -Z1 dist/green-vita.vpk | grep -Fx eboot.bin
+          cd dist
+          sha256sum green-vita.vpk > green-vita.vpk.sha256
+      - name: Publish stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view v0.3.4 >/dev/null 2>&1; then
+            echo 'Release already exists; refusing overwrite.'
+            exit 1
+          fi
+          gh release create v0.3.4 dist/green-vita.vpk dist/green-vita.vpk.sha256 --target "$GITHUB_SHA" --title "GreenVita v0.3.4 Final" --notes-file docs/releases/v0.3.4.md --draft
+          gh release edit v0.3.4 --draft=false --latest
+          gh release view v0.3.4 --json url,isDraft,isPrerelease,assets

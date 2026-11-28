@@ -27,7 +27,7 @@ You need a homebrew-enabled PS Vita with VitaShell and an Xbox account that has
 access to Xbox Cloud Gaming.
 
 1. Download `green-vita.vpk` from the
-   [GreenVita v0.3.3 Final](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.3.3). The previous [v0.3.2 Final](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.3.2) remains available for rollback.
+   [GreenVita v0.3.4 Final](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.3.4). The previous [v0.3.3 Final](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.3.3) and [v0.3.2 Final](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.3.2) remains available for rollback.
    For the earlier stable experiment, use the [v0.2.0 beta](https://github.com/joaopedr00000/green-vita-xconsole/releases/tag/v0.2.0-beta.1).
 2. Transfer the VPK to the Vita.
 3. Install it with VitaShell.
@@ -42,6 +42,10 @@ access to Xbox Cloud Gaming.
 This fork keeps the original GreenVita interface, settings, controller support, xCloud and xHome features. When connecting to Xbox Cloud Gaming, it automatically tries the `xgpuconsole` offering with Xbox One client metadata and silently falls back to the original `xgpuweb`/`xgpuwebf2p` connection when the console attempt fails. The console attempt is **experimental** and does not provide genuine Xbox hardware authentication, guarantee game compatibility or bypass Microsoft's server-side access controls.
 
 The original source project is [Day-OS/green-vita](https://github.com/Day-OS/green-vita). This fork includes the extra console-offering experiment and optional adaptive streaming profiles (6/10/15 Mbps requested RTCP REMB), video jitter diagnostics, adaptive audio buffering and manual session restart. Console-only games are not confirmed playable.
+
+## 0.3.4 Final — Public decoder and verified frame timing
+
+Based on the physical Vita-tested Build 18, with bounded diagnostic retention from Build 19, proactive decoder recreation disabled, and the installed-version update notification corrected. Single-picture Public H.264 decoding, three BGR565 textures, 64-byte zeroed input padding and returned-picture PTS correlation. The 60-second Build 18 benchmarks reported 90.14 ms and 102.53 ms mean local pipeline latency; not button-to-photon. The final package is rebuilt for the release corrections; these are reference measurements, not new measurements of the final VPK. See [release notes in English, Portuguese and Spanish](docs/releases/v0.3.4.md).
 
 ## 0.3.3 Final — Extreme latency update
 

@@ -1,6 +1,6 @@
 //! Read-only update notification. Never installs VPKs or follows untrusted download URLs.
 use std::time::Duration;
-const CURRENT_VERSION: &str = "v0.3.0-beta.1";
+const CURRENT_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 const RELEASES_URL: &str = "https://api.github.com/repos/joaopedr00000/green-vita-xconsole/releases?per_page=5";
 
 fn version_rank(tag: &str) -> Option<(u32, u32, u32, u32, u32)> {
@@ -44,6 +44,10 @@ pub(crate) async fn check_for_update() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn installed_version_matches_package() {
+        assert_eq!(CURRENT_VERSION, concat!("v", env!("CARGO_PKG_VERSION")));
+    }
     #[test]
     fn compares_beta_versions_without_lexicographic_errors() {
         assert!(version_rank("v0.3.0-beta.12") > version_rank("v0.3.0-beta.2"));

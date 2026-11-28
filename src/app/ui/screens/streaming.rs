@@ -203,7 +203,7 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                     if let Some(w)=crate::streaming::video::metrics::decoder_window(){
                         row(ui,tr("Atraso / PTS pendentes","Frame lag / pending PTS"),if w.matched>0{format!("{:.2} / {}",w.lag_x100 as f64/100.0,w.pending)}else{format!("— / {}",w.pending)},white);
                         row(ui,tr("Chamada / espera est.","Call / estimated wait"),format!("{} / {}",millis(w.call_us),optional_ms(w.wait_us,w.matched>0)),white);
-                        row(ui,tr("Reinício em IDR","IDR restart"),if w.restart_trial{tr("Teste realizado","Trial performed")}else{tr("Não testado","Not tested")},white);
+                        row(ui,tr("Reinício preventivo","Proactive restart"),tr("Desativado","Disabled"),white);
                     }else{
                         note(ui,tr("Aguardando dados do decoder…","Waiting for decoder data…"),muted);
                     }

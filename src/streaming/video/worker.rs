@@ -163,7 +163,6 @@ fn run_decode_loop(
     direct_output: Arc<DirectVideoOutput>,
 ) {
     let mut decoder = Some(initial_decoder);
-    let mut restart_trial_used=false;
 
     loop {
         select_biased! {
@@ -186,7 +185,6 @@ fn run_decode_loop(
                     access_unit,
                     &direct_output,
                     access_units.len(),
-                    &mut restart_trial_used,
                 );
             }
         }
@@ -202,7 +200,6 @@ fn decode_queued_access_unit(
     mut access_unit: QueuedAccessUnit,
     direct_output: &DirectVideoOutput,
     remaining:usize,
-    restart_trial_used:&mut bool,
 ) {
     if access_unit.generation != generation.load(Ordering::Acquire) {
         return;
@@ -219,23 +216,15 @@ fn decode_queued_access_unit(
     };
     let texture_acquired_at=Instant::now();
     if access_unit.generation != generation.load(Ordering::Acquire) {return;}
-    // A single controlled restart at a naturally arriving self-contained IDR.
-    // Never drain reference pictures or discard arbitrary compressed P frames.
-    let trial=access_unit.clean_idr && !*restart_trial_used &&
-        decoder.as_ref().is_some_and(HwVideoDecoder::trial_ready);
-    let resync=access_unit.clean_idr &&
-        decoder.as_ref().is_some_and(|d|d.generation_changed(access_unit.generation));
-    let trial_lag=if trial && !resync {decoder.as_ref().and_then(HwVideoDecoder::lag)}else{None};
-    if trial_lag.is_some() || resync{
-        if let Some(before)=trial_lag{
-            *restart_trial_used=true;
-            crate::diagnostics::decoder_restart_begin(before);
-        }else{crate::diagnostics::step("decoder_restart","CLEAN_IDR_RESYNC");}
+    // Only recreate for real resync, not for speculative latency recovery.
+    if access_unit.clean_idr &&
+        decoder.as_ref().is_some_and(|d|d.generation_changed(access_unit.generation)){
+        crate::diagnostics::step("decoder_restart","CLEAN_IDR_RESYNC");
         *decoder=None;
     }
     if decoder.is_none() {
         match HwVideoDecoder::new(config) {
-            Ok(mut new_decoder) => {if let Some(before)=trial_lag{new_decoder.mark_trial(before);} *decoder = Some(new_decoder);},
+            Ok(new_decoder) => *decoder = Some(new_decoder),
             Err(error) => {
                 publish_result(
                     latest_result,

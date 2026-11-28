@@ -212,18 +212,3 @@ pub fn adaptive_reorder_grace_ms(base:u64,mode:u8,low_latency:bool,jitter_us:u64
 }
 #[cfg(test)] mod adaptive_reorder_tests{use super::*;#[test]fn safe_bounds(){assert_eq!(adaptive_reorder_grace_ms(16,2,true,0,false),8);assert_eq!(adaptive_reorder_grace_ms(18,2,true,4000,false),16);assert_eq!(adaptive_reorder_grace_ms(24,2,true,5000,false),24);assert_eq!(adaptive_reorder_grace_ms(16,2,true,0,true),16);assert_eq!(adaptive_reorder_grace_ms(32,2,false,0,false),32);}}
 
-/// A one-shot experiment only on an independently decodable IDR, after warmup.
-pub fn decoder_restart_probe(used:bool,clean_idr:bool,lag:u64,matched:u64,seconds:u64)->bool{
-    !used && clean_idr && lag>=7 && matched>=300 && seconds>=10
-}
-#[cfg(test)]mod restart_probe_tests{
-    use super::*;
-    #[test]fn only_after_warmup_and_clean_idr(){
-        assert!(decoder_restart_probe(false,true,7,300,10));
-        assert!(!decoder_restart_probe(true,true,8,300,10));
-        assert!(!decoder_restart_probe(false,false,8,300,10));
-        assert!(!decoder_restart_probe(false,true,6,300,10));
-        assert!(!decoder_restart_probe(false,true,8,299,10));
-        assert!(!decoder_restart_probe(false,true,8,300,9));
-    }
-}
