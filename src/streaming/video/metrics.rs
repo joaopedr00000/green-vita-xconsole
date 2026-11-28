@@ -20,7 +20,7 @@ pub(crate) static AUDIO_HANDOFF_MAX_US:AtomicU64=AtomicU64::new(0);
 pub(crate) static AUDIO_DEVICE_PERIOD_US:AtomicU64=AtomicU64::new(0);
 pub(crate) static TELEMETRY_MISSED:AtomicU64=AtomicU64::new(0);
 pub(crate) fn presented(stages:PresentedStages){if !stages.decode.verified{return;}if let Ok(mut s)=STAGES.try_lock(){s.last=Some(stages);s.sum=s.sum.saturating_add(stages.total_us);s.max=s.max.max(stages.total_us);s.count+=1;if s.totals.len()<256{s.totals.push(stages.total_us);}if stages.present_gap_us>0 && s.gaps.len()<256{s.gaps.push(stages.present_gap_us);}}else{TELEMETRY_MISSED.fetch_add(1,Ordering::Relaxed);}}
-pub(crate) fn clear_stages(){if let Ok(mut s)=STAGES.lock(){*s=StageWindow::default();}QUEUE_DEPTH.store(0,Ordering::Relaxed);STALE_HANDOFFS.store(0,Ordering::Relaxed);OUTPUT_REPLACEMENTS.store(0,Ordering::Relaxed);CATCH_UP_REPLACEMENTS.store(0,Ordering::Relaxed);FRAME_WAKES.store(0,Ordering::Relaxed);IDLE_SWAPS_SAVED.store(0,Ordering::Relaxed);TELEMETRY_MISSED.store(0,Ordering::Relaxed);}
+pub(crate) fn clear_stages(){if let Ok(mut w)=DECODER_WINDOW.lock(){*w=DecoderWindow::default();}if let Ok(mut s)=STAGES.lock(){*s=StageWindow::default();}QUEUE_DEPTH.store(0,Ordering::Relaxed);STALE_HANDOFFS.store(0,Ordering::Relaxed);OUTPUT_REPLACEMENTS.store(0,Ordering::Relaxed);CATCH_UP_REPLACEMENTS.store(0,Ordering::Relaxed);FRAME_WAKES.store(0,Ordering::Relaxed);IDLE_SWAPS_SAVED.store(0,Ordering::Relaxed);TELEMETRY_MISSED.store(0,Ordering::Relaxed);}
 
 pub(crate) struct VideoMetrics {
     pub(crate) rtp_assembly_sum_us: AtomicU64,
@@ -85,4 +85,18 @@ pub(crate) fn snapshot() -> crate::streaming::hud::PlaybackMetrics {
 pub fn video_performance_summary() -> String { summary(&snapshot()) }
 pub(crate) fn summary(m:&crate::streaming::hud::PlaybackMetrics)->String {
     format!("fps d/p:{}/{} us r:{}/{} d/a:{}/{} inputq:{}us displayq:{}us pipe:{}us audio:{}ms au:{}/{} skip:{} repl:{} q:{} rs:{} rst:{}",m.decoded,m.presented,m.rtp_avg_us,m.rtp_max_us,m.decode_us,m.queue_age_us,m.input_us,m.display_us,m.pipeline_us,m.audio_ms,m.underruns,m.audio_drops,m.skipped,m.replaced,m.queue_full,m.resyncs,m.resets)
+}
+
+#[derive(Clone,Copy,Debug,Default)]
+pub(crate) struct DecoderWindow{
+    pub pending:u64,pub lag_x100:u64,pub call_us:u64,pub wait_us:u64,pub matched:u64,
+    pub attempts:u64,pub recovered:u64,pub active:bool,pub rejected:bool,pub calls:u64,
+    pub at:Option<std::time::Instant>,
+}
+static DECODER_WINDOW:Mutex<DecoderWindow>=Mutex::new(DecoderWindow{pending:0,lag_x100:0,call_us:0,wait_us:0,matched:0,attempts:0,recovered:0,active:false,rejected:false,calls:0,at:None});
+pub(crate) fn record_decoder_window(w:DecoderWindow){if let Ok(mut slot)=DECODER_WINDOW.try_lock(){*slot=w;}}
+pub(crate) fn decoder_window()->Option<DecoderWindow>{
+    let w=*DECODER_WINDOW.try_lock().ok()?;
+    w.at.filter(|at|at.elapsed()<std::time::Duration::from_secs(12))?;
+    Some(w)
 }

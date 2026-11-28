@@ -231,3 +231,19 @@ pub fn second_decode_texture(count:usize,displayed:Option<usize>,pending:Option<
     }
     #[test] fn startup_can_reserve_two(){assert_eq!(second_decode_texture(3,None,None,0),Some(1));}
 }
+
+ // Stop a dual-output trial if the API never produces a second picture.
+ // This is a bounded probe, not a claim about the hardware's DPB.
+ pub fn probe_dual_output(lag:usize,attempts:u64,recovered:u64,disabled:bool)->bool{
+     !disabled && lag>=4 && (attempts<120 || recovered>0)
+ }
+ #[cfg(test)]mod dual_probe_tests{
+     use super::*;
+     #[test]fn bounded_and_backlog_only(){
+         assert!(!probe_dual_output(3,0,0,false));
+         assert!(probe_dual_output(4,119,0,false));
+         assert!(!probe_dual_output(4,120,0,false));
+         assert!(probe_dual_output(4,120,1,false));
+         assert!(!probe_dual_output(8,0,0,true));
+     }
+ }

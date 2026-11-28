@@ -7,7 +7,8 @@ use std::sync::mpsc::{SyncSender, sync_channel};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DIR: &str = "ux0:data/xcloud-rust";
-const FILE: &str = "ux0:data/xcloud-rust/connection-status.txt";
+static LOG_STATUS: AtomicU64 = AtomicU64::new(0);
+pub(crate) fn log_status()->u64{LOG_STATUS.load(Ordering::Relaxed)}
 const MAX_EVENTS: usize = 512;
 const QUEUE_CAPACITY: usize = 128;
 static SENDER: OnceLock<Option<SyncSender<String>>> = OnceLock::new();
@@ -107,36 +108,47 @@ pub(crate) fn initialize() {
             let started = Instant::now();
             let epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
             use std::io::Write;
+            let path=format!("{DIR}/connection-status-b{}.txt",crate::experimental::build_id());
+            let previous=format!("{path}.previous");
             let mut sequence = 0u64;
             let mut segment_count = 0usize;
+            let mut initialized=false;
             let mut file: Option<std::fs::File> = None;
             while let Ok(first) = rx.recv() {
                 for record in std::iter::once(first).chain(rx.try_iter().take(QUEUE_CAPACITY)) {
-                    if file.is_none() || segment_count >= MAX_EVENTS {
-                        // Two bounded segments; keep the previous segment through rotation.
+                    if segment_count >= MAX_EVENTS {
                         file.take();
-                        let previous = format!("{FILE}.previous");
-                        if segment_count >= MAX_EVENTS {
-                            let _ = std::fs::remove_file(&previous);
-                            let _ = std::fs::rename(FILE, &previous);
+                        let _=std::fs::remove_file(&previous);
+                        if std::fs::rename(&path,&previous).is_ok(){
+                            initialized=false;segment_count=0;
+                        }else{
+                            // Preserve current data and retry rotation later.
+                            LOG_STATUS.store(2,Ordering::Relaxed);
+                            DROPPED.fetch_add(1,Ordering::Relaxed);continue;
                         }
-                        let _ = std::fs::remove_file(FILE);
-                        file = std::fs::File::create(FILE).ok();
-                        segment_count = 0;
-                        if let Some(out) = file.as_mut() {
-                            if writeln!(out,"GreenVita {} | UTC epoch {} | redacted local diagnostics",env!("CARGO_PKG_VERSION"),epoch).is_err() { file = None; }
+                    }
+                    if file.is_none(){
+                        let opened=if initialized{
+                            std::fs::OpenOptions::new().create(true).append(true).open(&path)
+                        }else{std::fs::File::create(&path)};
+                        if let Ok(mut out)=opened{
+                            if initialized || writeln!(out,"GreenVita {} | build {} | UTC epoch {} | redacted local diagnostics",env!("CARGO_PKG_VERSION"),crate::experimental::build_id(),epoch).is_ok(){
+                                initialized=true;file=Some(out);
+                            }
                         }
                     }
                     sequence = sequence.saturating_add(1);
-                    if let Some(out) = file.as_mut() {
-                        if writeln!(out,"  {} +{}ms dropped={} {}",sequence,started.elapsed().as_millis(),DROPPED.load(Ordering::Relaxed),record).is_ok() {
-                            segment_count += 1;
-                        } else { file = None; }
-                    }
+                    if let Some(out)=file.as_mut(){
+                        if writeln!(out,"  {} +{}ms dropped={} {}",sequence,started.elapsed().as_millis(),DROPPED.load(Ordering::Relaxed),record).is_ok(){
+                            segment_count+=1;
+                        }else{file=None;LOG_STATUS.store(2,Ordering::Relaxed);DROPPED.fetch_add(1,Ordering::Relaxed);}
+                    }else{LOG_STATUS.store(2,Ordering::Relaxed);DROPPED.fetch_add(1,Ordering::Relaxed);}
                 }
-                if let Some(out) = file.as_mut() { let _ = out.flush(); }
-                // Back off on unavailable storage, not the stream producer.
-                if file.is_none() { std::thread::sleep(Duration::from_secs(2)); }
+                if let Some(out)=file.as_mut(){
+                    if out.flush().is_ok(){LOG_STATUS.store(1,Ordering::Relaxed);}
+                    else{file=None;LOG_STATUS.store(2,Ordering::Relaxed);}
+                }
+                if file.is_none(){std::thread::sleep(Duration::from_secs(2));}
             }
         }).ok().map(|_| tx)
     });

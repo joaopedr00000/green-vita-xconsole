@@ -59,7 +59,7 @@ fn health(us:u64,good:u64,warn:u64)->egui::Color32{if us<=good{egui::Color32::fr
 // The Vita UI uses 1.3 physical pixels per point (544/1.3 = 418 logical
 // points). egui widget minimum heights can make long diagnostic pages overflow.
 // Draw noninteractive rows with an explicit height instead of clickable widgets.
-const HUD_ROW_HEIGHT:f32=13.5;
+const HUD_ROW_HEIGHT:f32=12.0;
 fn row(ui:&mut egui::Ui,label:&str,value:impl Into<String>,color:egui::Color32){
     let value=value.into();
     let (rect,_)=ui.allocate_exact_size(egui::vec2(ui.available_width(),HUD_ROW_HEIGHT),egui::Sense::hover());
@@ -98,7 +98,7 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
             .stroke(egui::Stroke::new(1.0,egui::Color32::from_gray(65)))
             .corner_radius(6).inner_margin(6).show(ui,|ui|{
             ui.set_width(252.0);ui.spacing_mut().item_spacing.y=0.0;
-            section(ui,tr("DIAGNÓSTICO","DIAGNOSTICS"));
+            section(ui,&format!("{} · B{}",tr("DIAGNÓSTICO","DIAGNOSTICS"),crate::experimental::build_id()));
             let Some(h)=streaming.hud.as_ref().filter(|h|h.at.elapsed()<std::time::Duration::from_secs(3)) else{
                 note(ui,tr("Aguardando métricas…","Waiting for measurements…"),muted);return;
             };
@@ -200,12 +200,19 @@ fn show_diagnostics(ctx:&egui::Context,app:&App,streaming:&crate::app::stream_se
                         row(ui,tr("Apresentações diretas","Direct presentations"),b.direct_wakes.to_string(),white);
                         row(ui,tr("Amostras fora do limite","Samples beyond cap"),b.pipeline.omitted.to_string(),white);
                     }
-                    note(ui,tr("Só PTS confirmados contam na latência; FPS conta todos os quadros. Não mede botão até tela.","Only matched PTS count for latency; FPS counts all frames. Not button-to-photon."),muted);
+                    if let Some(w)=crate::streaming::video::metrics::decoder_window(){
+                        row(ui,tr("Atraso / PTS pendentes","Frame lag / pending PTS"),if w.matched>0{format!("{:.2} / {}",w.lag_x100 as f64/100.0,w.pending)}else{format!("— / {}",w.pending)},white);
+                        row(ui,tr("Chamada / espera est.","Call / estimated wait"),format!("{} / {}",millis(w.call_us),optional_ms(w.wait_us,w.matched>0)),white);
+                        row(ui,tr("Saída dupla: testes / êxitos","Dual output: trials / hits"),format!("{} / {}{}",w.attempts,w.recovered,if w.active{""}else{" · off"}),white);
+                    }else{
+                        note(ui,tr("Aguardando dados do decoder…","Waiting for decoder data…"),muted);
+                    }
+                    note(ui,tr("PTS confirmados; não mede botão até tela.","Matched PTS; not button-to-photon."),muted);
                 },
                 _=>{}
             }
             if matches!(app.settings.hud_page,2|3){note(ui,tr("¹ Contadores acumulados (catch-up: sessão)","¹ Cumulative counters (catch-up: session)"),muted);}
-            note(ui,tr("RTT ICE ≠ input total; * amostra antiga.","ICE RTT ≠ total input; * old sample."),muted);
+            note(ui,&format!("RTT ICE ≠ input · Log: {}",match crate::diagnostics::log_status(){1=>"OK",2=>tr("erro","error"),_=>tr("aguardando","waiting")}),muted);
         });
     });
 }

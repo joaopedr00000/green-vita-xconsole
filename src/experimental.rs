@@ -31,3 +31,5 @@ fn apply(clocks:[i32;4]){
 impl Drop for PerformanceMode{fn drop(&mut self){#[cfg(target_os="vita")]apply(self.old);}}
 
 pub(crate) fn decoder_name()->&'static str{"Public"}
+
+pub(crate) fn build_id()->&'static str{option_env!("GREEN_VITA_BUILD").unwrap_or("15-local")}

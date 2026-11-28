@@ -271,6 +271,9 @@ pub struct HwVideoDecoder {
     calls: u64,
     dual_calls:u64,
     dual_outputs:u64,
+    probe_attempts:u64,
+    probe_recovered:u64,
+    wait_sum_us:u64,
     empty: u64,
     call_total_us: u64,
     call_max_us: u64,
@@ -285,17 +288,17 @@ impl HwVideoDecoder {
         let backend=PublicDecoder::new(config)?;
         crate::diagnostics::step("lab_decoder","PUBLIC");
         Ok(Self{backend,pending:Pending::new(),seq:0,no_output:0,peak_no_output:0,
-            peak_pending:0,outputs:0,calls:0,dual_calls:0,dual_outputs:0,empty:0,call_total_us:0,call_max_us:0,frame_lag_sum:0,frame_lag_max:0,matched:0,last_report:Instant::now()})
+            peak_pending:0,outputs:0,calls:0,dual_calls:0,dual_outputs:0,probe_attempts:0,probe_recovered:0,wait_sum_us:0,empty:0,call_total_us:0,call_max_us:0,frame_lag_sum:0,frame_lag_max:0,matched:0,last_report:Instant::now()})
     }
-    pub(super) fn allow_two(&self)->bool{!DUAL_DISABLED.load(Ordering::Relaxed)}
+    pub(super) fn allow_two(&self)->bool{crate::streaming::policy::probe_dual_output(self.pending.len(),self.probe_attempts,self.probe_recovered,DUAL_DISABLED.load(Ordering::Relaxed))}
     pub fn decode(&mut self,data:&[u8],targets:[Option<VideoTextureTarget>;2],mut timing:FrameTiming)->Result<Option<(usize,FrameTiming)>>{
         self.seq=self.seq.saturating_add(1);
         let pts=self.seq.saturating_mul(super::AU_PTS_STEP);
         let started=Instant::now();
         let returned=self.backend.decode(data,targets,pts)?;
         self.calls+=1;
-        if targets[1].is_some(){self.dual_calls+=1;}
-        if returned[1].is_some(){self.dual_outputs+=1;}
+        if targets[1].is_some(){self.dual_calls+=1;self.probe_attempts+=1;}
+        if returned[1].is_some(){self.dual_outputs+=1;self.probe_recovered+=1;}
         let call_us=started.elapsed().as_micros() as u64;
         timing.stages.decode_us=call_us;
         self.pending.push(pts,(timing,started));
@@ -316,6 +319,7 @@ impl HwVideoDecoder {
                     self.frame_lag_max=self.frame_lag_max.max(lag);self.matched+=1;
                     original.stages.verified=true;
                     original.stages.decoder_age_us=submitted.elapsed().as_micros() as u64;
+                    self.wait_sum_us=self.wait_sum_us.saturating_add(original.stages.decoder_age_us.saturating_sub(original.stages.decode_us));
                     original
                 }else{
                     let mut unknown=timing;unknown.stages.verified=false;unknown
@@ -336,6 +340,13 @@ impl HwVideoDecoder {
         self.peak_pending=self.peak_pending.max(self.pending.len());
         if self.last_report.elapsed().as_secs()>=5 {
             let calls=self.calls;
+            super::metrics::record_decoder_window(super::metrics::DecoderWindow {
+                pending:self.pending.len() as u64,lag_x100:self.frame_lag_sum.saturating_mul(100)/self.matched.max(1),
+                call_us:self.call_total_us/calls.max(1),wait_us:self.wait_sum_us/self.matched.max(1),
+                matched:self.matched,attempts:self.probe_attempts,recovered:self.probe_recovered,
+                active:self.allow_two(),rejected:DUAL_DISABLED.load(Ordering::Relaxed),
+                calls,at:Some(Instant::now()),
+            });
             crate::diagnostics::decoder_dual_info(calls,self.dual_calls,self.dual_outputs);
             crate::diagnostics::decoder_buffer_info(self.outputs,self.empty,self.peak_no_output,
                 self.pending.len(),self.peak_pending,self.call_total_us/calls.max(1),self.call_max_us,
@@ -343,7 +354,7 @@ impl HwVideoDecoder {
             self.last_report=Instant::now();
             self.outputs=0;self.calls=0;self.dual_calls=0;self.dual_outputs=0;self.empty=0;self.peak_no_output=self.no_output;
             self.peak_pending=self.pending.len();self.call_total_us=0;self.call_max_us=0;
-            self.frame_lag_sum=0;self.frame_lag_max=0;self.matched=0;
+            self.frame_lag_sum=0;self.frame_lag_max=0;self.matched=0;self.wait_sum_us=0;
         }
         Ok(result)
     }

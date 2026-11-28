@@ -1,7 +1,7 @@
 use crate::streaming::video::{STREAM_HEIGHT, STREAM_WIDTH, VideoDecodeWorker};
 use bytes::Bytes;
 use h264_reader::annexb::AnnexBReader;
-use h264_reader::nal::sps::{SeqParameterSet, FrameMbsFlags, PicOrderCntType};
+use h264_reader::nal::sps::{SeqParameterSet, PicOrderCntType};
 use h264_reader::nal::{Nal, RefNal, UnitType};
 use h264_reader::push::NalInterest;
 use rtc::rtp::Packet;
@@ -375,8 +375,8 @@ impl VideoRtp {
             self.damage_score = self.damage_score.saturating_sub(1);
         }
 
-        let data = if unit.resolution.is_some() { tighten_sps(&data) } else { data.to_vec() };
-        if !worker.submit_access_unit(data, self.source_frame_duration_us) {
+        if unit.resolution.is_some() { inspect_decoder_sps(&data); }
+        if !worker.submit_access_unit(data.to_vec(), self.source_frame_duration_us) {
             eprintln!("Video decoder queue is full; continuing while requesting a keyframe");
             *keyframe_requested = true;
             stats.dropped = stats.dropped.saturating_add(1);
@@ -463,10 +463,8 @@ fn start_code(data:&[u8],from:usize)->Option<(usize,usize)>{
         i+=1;
     }None
 }
-fn tighten_sps(data:&[u8])->Vec<u8>{
-    let Some((_,mut start))=start_code(data,0) else{return data.to_vec();};
-    let mut out=Vec::with_capacity(data.len()+32);
-    let mut copied=0;
+fn inspect_decoder_sps(data:&[u8]){
+    let Some((_,mut start))=start_code(data,0) else{return;};
     loop{
         let next=start_code(data,start);
         let end=next.map_or(data.len(),|v|v.0);
@@ -477,29 +475,10 @@ fn tighten_sps(data:&[u8])->Vec<u8>{
             if let Ok(sps)=SeqParameterSet::from_bits(RefNal::new(n,&[],true).rbsp_bits()){
                 let restriction=sps.vui_parameters.as_ref().and_then(|v|v.bitstream_restrictions.as_ref())
                     .map(|r|(r.max_num_reorder_frames,r.max_dec_frame_buffering));
-                let progressive=matches!(&sps.frame_mbs_flags,FrameMbsFlags::Frames);
-                // POC type 2 on progressive streams has no output reordering.
-                // Also accept explicit zero or H.264's normative inferred zero.
                 let poc2=matches!(&sps.pic_order_cnt,PicOrderCntType::TypeTwo);
-                let inferred_zero=matches!(n[1],44|86|100|110|122|244)&&n[2]&0x10!=0;
-                let zero=progressive && restriction.map_or(poc2||inferred_zero,|r|r.0==0);
-                let mut applied=false;
-                if let Some(patched)=super::sps_tail::rewrite(n,sps.vui_parameters.is_some(),restriction,sps.max_num_ref_frames,zero){
-                    if let Ok(check)=SeqParameterSet::from_bits(RefNal::new(&patched,&[],true).rbsp_bits()){
-                        let valid=check.max_num_ref_frames==sps.max_num_ref_frames &&
-                            check.pixel_dimensions().ok()==sps.pixel_dimensions().ok() &&
-                            check.vui_parameters.as_ref().and_then(|v|v.bitstream_restrictions.as_ref())
-                                .is_some_and(|r|r.max_num_reorder_frames==0 && r.max_dec_frame_buffering==1);
-                        if valid{
-                            out.extend_from_slice(&data[copied..start]);out.extend_from_slice(&patched);
-                            copied=nal_end;applied=true;
-                        }
-                    }
-                }
-                crate::diagnostics::decoder_sps_info(n[1],n[2],n[3],sps.max_num_ref_frames,restriction,poc2,applied);
+                crate::diagnostics::decoder_sps_info(n[1],n[2],n[3],sps.max_num_ref_frames,restriction,poc2,false);
             }
         }
         match next{Some((_,s))=>start=s,None=>break}
     }
-    out.extend_from_slice(&data[copied..]);out
 }
